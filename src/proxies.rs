@@ -34,16 +34,6 @@ pub trait DexProxy {
         second_token_amount_min: BigUint,
     );
 
-    // View functions for reading pool state (xExchange, Jex, OneDex share similar interface)
-    #[view(getReservesAndTotalSupply)]
-    fn get_reserves_and_total_supply(&self) -> MultiValue3<BigUint, BigUint, BigUint>;
-
-    #[view(getFirstTokenId)]
-    fn get_first_token_id(&self) -> TokenIdentifier;
-
-    #[view(getSecondTokenId)]
-    fn get_second_token_id(&self) -> TokenIdentifier;
-
     // ═══════════════════════════════════════════════════════════════════════════
     // OneDex
     // ═══════════════════════════════════════════════════════════════════════════
