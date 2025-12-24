@@ -11,16 +11,10 @@
 // Total number of exported functions:  14
 
 #![no_std]
-#![cfg_attr(test, allow(unused))]
 
-// WASM-only: allocator and panic handler use VM externals not available in tests
-#[cfg(not(test))]
 multiversx_sc_wasm_adapter::allocator!();
-
-#[cfg(not(test))]
 multiversx_sc_wasm_adapter::panic_handler!();
 
-#[cfg(not(test))]
 multiversx_sc_wasm_adapter::endpoints! {
     aggregator
     (
@@ -40,5 +34,4 @@ multiversx_sc_wasm_adapter::endpoints! {
     )
 }
 
-#[cfg(not(test))]
 multiversx_sc_wasm_adapter::async_callback_empty! {}

@@ -235,6 +235,21 @@ impl CompactAction {
                 | Self::JexStableAddLiquidity
         )
     }
+
+    /// Check if this action needs output count (for remove liquidity)
+    /// Format: [action, count, in_tok, in_mode, 0, addr]
+    pub fn needs_output_count(&self) -> bool {
+        matches!(
+            self,
+            Self::AshSwapPoolRemoveLiquidity | Self::AshSwapV2RemoveLiquidity
+        )
+    }
+
+    /// Check if this action needs pair_id (OneDex add liquidity)
+    /// Format: [action, pair_id, tok1, mode1, tok2, mode2]
+    pub fn needs_pair_id(&self) -> bool {
+        matches!(self, Self::OneDexAddLiquidity)
+    }
 }
 
 /// Compact amount mode as u8

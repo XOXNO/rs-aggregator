@@ -175,6 +175,7 @@ pub trait Aggregator: storage::Storage {
             mode1,
             tok2_idx,
             mode2,
+            addr_idx,
             tokens,
             amounts,
         );
@@ -285,6 +286,9 @@ pub trait Aggregator: storage::Storage {
     /// For single-input actions:
     ///   - tok1_idx = input token, mode1 = mode
     ///   - tok2_idx = IDX_NONE
+    ///
+    /// For OneDex add_liquidity with pair_id:
+    ///   - tok1_idx = pair_id, mode1 = tok1, tok2_idx = mode1, mode2 = tok2, addr_idx = mode2
     fn build_inputs(
         &self,
         compact_action: &CompactAction,
@@ -292,6 +296,7 @@ pub trait Aggregator: storage::Storage {
         mode1: u8,
         tok2_idx: u8,
         mode2: u8,
+        addr_idx: u8,
         tokens: &TokenRegistry<Self::Api>,
         amounts: &AmountRegistry<Self::Api>,
     ) -> Option<ManagedVec<Self::Api, InputArg<Self::Api>>> {
@@ -346,6 +351,44 @@ pub trait Aggregator: storage::Storage {
                 });
             }
 
+            return Some(inputs);
+        }
+
+        // For remove liquidity with output count: tok1_idx = count, mode1 = input token, tok2_idx = input mode
+        // Layout: [action, count, in_tok, in_mode, 0, addr]
+        if compact_action.needs_output_count() {
+            let input_token_idx = mode1;
+            let input_mode = CompactMode::from_u8(tok2_idx);
+
+            if matches!(input_mode, CompactMode::Prev) && input_token_idx == IDX_NONE {
+                return None;
+            }
+
+            let mut inputs = ManagedVec::new();
+            inputs.push(InputArg {
+                token: self.token_idx_to_buffer(input_token_idx, tokens),
+                mode: self.compact_mode_to_amount_mode(&input_mode, amounts),
+            });
+            return Some(inputs);
+        }
+
+        // For OneDex add liquidity with pair_id: tok1_idx = pair_id, inputs in bytes 2-5
+        // Layout: [action, pair_id, tok1, mode1, tok2, mode2]
+        if compact_action.needs_pair_id() {
+            let token1_idx = mode1; // byte 2
+            let mode1_value = CompactMode::from_u8(tok2_idx); // byte 3
+            let token2_idx = mode2; // byte 4
+            let mode2_value = CompactMode::from_u8(addr_idx); // byte 5
+
+            let mut inputs = ManagedVec::new();
+            inputs.push(InputArg {
+                token: self.token_idx_to_buffer(token1_idx, tokens),
+                mode: self.compact_mode_to_amount_mode(&mode1_value, amounts),
+            });
+            inputs.push(InputArg {
+                token: self.token_idx_to_buffer(token2_idx, tokens),
+                mode: self.compact_mode_to_amount_mode(&mode2_value, amounts),
+            });
             return Some(inputs);
         }
 
