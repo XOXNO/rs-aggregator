@@ -1,14 +1,16 @@
 multiversx_sc::imports!();
 
+use multiversx_sc::api::VMApi;
+
 /// In-memory vault for tracking intermediate token balances during aggregation
 /// Uses ManagedMapEncoded for O(1) key-value access
-pub struct Vault<M: ManagedTypeApi> {
+pub struct Vault<M: VMApi> {
     balances: ManagedMapEncoded<M, TokenId<M>, BigUint<M>>,
     tokens: ManagedVec<M, TokenId<M>>,
     prev_result: Option<Payment<M>>,
 }
 
-impl<M: ManagedTypeApi> Vault<M> {
+impl<M: VMApi> Vault<M> {
     /// Create a new empty vault
     pub fn new() -> Self {
         Self {
@@ -26,23 +28,16 @@ impl<M: ManagedTypeApi> Vault<M> {
         self.prev_result = Some(payment.clone());
     }
 
-    /// Initialize vault from incoming ESDT payments
-    pub fn from_payments(payments: &ManagedVec<M, Payment<M>>) -> Self {
-        let mut vault = Self::new();
-        for payment in payments.iter() {
-            if payment.token_nonce != 0 {
-                panic!("Only fungible ESDT tokens are accepted");
-            }
-            // deposit handles tokens list management now
-            vault.deposit(&payment.token_identifier, &payment.amount);
-        }
-        vault
-    }
-
+    /// Initialize vault from a single ESDT payment
     pub fn from_payment(payment: Ref<Payment<M>>) -> Self {
         let mut vault = Self::new();
         if payment.token_nonce != 0 {
-            panic!("Only fungible ESDT tokens are accepted");
+            let mut buffer = ManagedBufferBuilder::<M>::new_from_slice(
+                b"Only fungible ESDT tokens are accepted, got ",
+            );
+            buffer.append_managed_buffer(payment.token_identifier.as_managed_buffer());
+            let msg = buffer.into_managed_buffer();
+            M::error_api_impl().signal_error_from_buffer(msg.get_handle());
         }
         // deposit handles tokens list management now
         vault.deposit(&payment.token_identifier, &payment.amount);
@@ -52,7 +47,11 @@ impl<M: ManagedTypeApi> Vault<M> {
     /// Get balance of a token (returns 0 if not found)
     pub fn balance_of(&self, token: &TokenId<M>) -> BigUint<M> {
         if !self.balances.contains(token) {
-            return BigUint::zero();
+            let mut buffer =
+                ManagedBufferBuilder::<M>::new_from_slice(b"Token not found in vault: ");
+            buffer.append_managed_buffer(token.as_managed_buffer());
+            let msg = buffer.into_managed_buffer();
+            M::error_api_impl().signal_error_from_buffer(msg.get_handle());
         }
         self.balances.get(token)
     }
@@ -69,14 +68,15 @@ impl<M: ManagedTypeApi> Vault<M> {
     }
 
     /// Remove specified amount from vault
-    /// Panics if insufficient balance
+    /// Signals error if insufficient balance
     pub fn withdraw(&mut self, token: &TokenId<M>, amount: &BigUint<M>) -> BigUint<M> {
         let current = self.balance_of(token);
         if &current < amount {
-            panic!(
-                "Insufficient vault balance for token {}",
-                token.as_managed_buffer()
-            );
+            let mut buffer =
+                ManagedBufferBuilder::<M>::new_from_slice(b"Insufficient vault balance for token ");
+            buffer.append_managed_buffer(token.as_managed_buffer());
+            let msg = buffer.into_managed_buffer();
+            M::error_api_impl().signal_error_from_buffer(msg.get_handle());
         }
 
         let new_balance = current - amount;
@@ -159,7 +159,7 @@ impl<M: ManagedTypeApi> Vault<M> {
     }
 }
 
-impl<M: ManagedTypeApi> Default for Vault<M> {
+impl<M: VMApi> Default for Vault<M> {
     fn default() -> Self {
         Self::new()
     }

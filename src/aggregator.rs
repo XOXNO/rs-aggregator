@@ -8,10 +8,12 @@ pub mod proxies;
 pub mod storage;
 pub mod types;
 pub mod vault;
+pub mod zap;
 
 use constants::{
     HATOM_STAKING, LXOXNO_STAKING, MIN_INTERNAL_OUTPUT, ONE_DEX_ROUTER, WRAPPER_SC, XEGLD_STAKING,
 };
+use multiversx_sc::chain_core::EGLD_000000_TOKEN_IDENTIFIER;
 use types::{AmountMode, Instruction};
 use vault::Vault;
 
@@ -30,9 +32,7 @@ pub trait Aggregator: storage::Storage {
     #[upgrade]
     fn upgrade(&self) {}
 
-    // ==========================================================================
-    // Main Aggregation Endpoint
-    // ==========================================================================
+    // --- Main Aggregation Endpoint ---
 
     /// Execute a sequence of aggregator instructions
     ///
@@ -62,9 +62,13 @@ pub trait Aggregator: storage::Storage {
         }
 
         // 3. Verify minimum output amount
+        let current_balance = vault.balance_of(&token_out);
+
         require!(
             vault.has_minimum(&token_out, &min_amount_out),
-            "Output amount below minimum"
+            "Output amount below minimum, expected at least {} of {}",
+            min_amount_out,
+            current_balance
         );
 
         // 4. Return all vault contents to caller
@@ -80,50 +84,58 @@ pub trait Aggregator: storage::Storage {
     #[proxy]
     fn proxy_call(&self, address: ManagedAddress) -> proxies::Proxy<Self::Api>;
 
-    // ==========================================================================
-    // Instruction Execution
-    // ==========================================================================
+    // --- Instruction Execution ---
 
     /// Execute a single instruction by dispatching to the appropriate DEX proxy
     fn execute_instruction(&self, vault: &mut Vault<Self::Api>, instr: &Instruction<Self::Api>) {
         let mut input_payments = ManagedVec::new();
 
-        require!(!instr.inputs.is_empty(), "No inputs in instruction");
+        if let Some(inputs) = &instr.inputs {
+            // 1. Withdraw all required inputs from vault
+            for input in inputs.iter() {
+                // Normalize token to handle "EGLD" -> "EGLD-000000"
+                let token = if input.token.is_empty() {
+                    TokenId::from(EGLD_000000_TOKEN_IDENTIFIER.as_bytes())
+                } else {
+                    TokenId::from(input.token.clone())
+                };
 
-        // 1. Withdraw all required inputs from vault
-        for input in instr.inputs.iter() {
-            let actual_amount = match &input.mode {
-                AmountMode::Fixed(amount) => vault.withdraw(&input.token, amount),
-                AmountMode::Ppm(ppm) => vault.withdraw_ppm(&input.token, ppm),
-                AmountMode::All => vault.withdraw_all(&input.token),
-                AmountMode::PrevAmount => {
-                    let prev_result = vault.get_prev_result();
-                    require!(prev_result.is_some(), "PrevAmount not available");
-                    let prev_value = prev_result.as_ref().unwrap();
-                    require!(
-                        input.token == prev_value.token_identifier,
-                        "PrevAmount token mismatch"
-                    );
-                    vault.withdraw(&input.token, prev_value.amount.clone().as_big_uint())
-                }
-            };
+                let actual_amount = match &input.mode {
+                    AmountMode::Fixed(amount) => vault.withdraw(&token, amount),
+                    AmountMode::Ppm(ppm) => vault.withdraw_ppm(&token, ppm),
+                    AmountMode::All => vault.withdraw_all(&token),
+                    AmountMode::PrevAmount => {
+                        let prev_result = vault.get_prev_result();
+                        require!(prev_result.is_some(), "PrevAmount not available");
+                        let prev_value = prev_result.as_ref().unwrap();
+                        require!(
+                            token == prev_value.token_identifier,
+                            "PrevAmount token mismatch"
+                        );
+                        vault.withdraw(&token, prev_value.amount.clone().as_big_uint())
+                    }
+                };
 
-            require!(actual_amount > 0u64, "Zero input amount");
+                require!(actual_amount > 0u64, "Zero input amount");
 
-            input_payments.push(Payment::new(
-                input.token.clone(),
-                0u64,
-                actual_amount.into_non_zero().unwrap(),
-            ));
+                input_payments.push(Payment::new(
+                    token,
+                    0u64,
+                    actual_amount.into_non_zero().unwrap(),
+                ));
+            }
+        } else {
+            let prev = vault.get_prev_result().clone().unwrap();
+            // Withdraw from vault to keep it in sync with actual contract holdings
+            vault.withdraw(&prev.token_identifier, prev.amount.as_big_uint());
+            input_payments.push(prev);
         }
 
         // 2. Dispatch to appropriate proxy
         self.dispatch_to_proxy(vault, instr, &input_payments);
     }
 
-    // ==========================================================================
-    // Dispatch Logic
-    // ==========================================================================
+    // --- Dispatch Logic ---
 
     /// Dispatch instruction to the appropriate DEX proxy
     fn dispatch_to_proxy(
@@ -132,15 +144,18 @@ pub trait Aggregator: storage::Storage {
         instr: &Instruction<Self::Api>,
         payments: &ManagedVec<Payment<Self::Api>>,
     ) {
+        // For zappable add_liquidity actions, use pre-balance optimization
+        if self.is_zappable_add_liquidity(&instr.action) {
+            return self.pre_balance_and_add_liquidity(vault, instr, payments);
+        }
+
         let min = BigUint::from(MIN_INTERNAL_OUTPUT);
 
         let mut call = self.get_proxy_call(instr, payments);
 
         // Execute the appropriate proxy call based on DEX type
         let back_transfers = match &instr.action {
-            // ═══════════════════════════════════════════════════════════════
-            // xExchange
-            // ═══════════════════════════════════════════════════════════════
+            // --- xExchange ---
             types::ActionType::XExchangeSwap(token_out) => call
                 .xexchange(token_out, min)
                 .payment(payments)
@@ -157,9 +172,7 @@ pub trait Aggregator: storage::Storage {
                 .returns(ReturnsBackTransfersReset)
                 .sync_call(),
 
-            // ═══════════════════════════════════════════════════════════════
-            // AshSwap V1 (Stable)
-            // ═══════════════════════════════════════════════════════════════
+            // --- AshSwap V1 (Stable) ---
             types::ActionType::AshSwapPoolSwap(token_out) => call
                 .ash_exchange_stable(token_out, min)
                 .payment(payments)
@@ -182,9 +195,7 @@ pub trait Aggregator: storage::Storage {
                 .returns(ReturnsBackTransfersReset)
                 .sync_call(),
 
-            // ═══════════════════════════════════════════════════════════════
-            // AshSwap V2 (Crypto)
-            // ═══════════════════════════════════════════════════════════════
+            // --- AshSwap V2 (Crypto) ---
             types::ActionType::AshSwapV2Swap => call
                 .ash_exchange_crypto(min)
                 .payment(payments)
@@ -213,14 +224,12 @@ pub trait Aggregator: storage::Storage {
                 .returns(ReturnsBackTransfersReset)
                 .sync_call(),
 
-            // ═══════════════════════════════════════════════════════════════
-            // OneDex
-            // ═══════════════════════════════════════════════════════════════
+            // --- OneDex ---
             types::ActionType::OneDexSwap(token_out) => {
                 let mut path = MultiValueEncoded::new();
-                for input in instr.inputs.iter() {
+                for input in payments.iter() {
                     unsafe {
-                        path.push(input.token.clone().into_esdt_unchecked());
+                        path.push(input.token_identifier.clone().into_esdt_unchecked());
                     }
                 }
                 path.push(token_out.clone());
@@ -229,7 +238,7 @@ pub trait Aggregator: storage::Storage {
                     .returns(ReturnsBackTransfersReset)
                     .sync_call()
             }
-            types::ActionType::OneDexAddLiquidity => call
+            types::ActionType::OneDexAddLiquidity(_) => call
                 .xdex_add_liquidity(min.clone(), min)
                 .payment(payments)
                 .returns(ReturnsBackTransfersReset)
@@ -240,9 +249,7 @@ pub trait Aggregator: storage::Storage {
                 .returns(ReturnsBackTransfersReset)
                 .sync_call(),
 
-            // ═══════════════════════════════════════════════════════════════
-            // Jex (CPMM)
-            // ═══════════════════════════════════════════════════════════════
+            // --- Jex (CPMM) ---
             types::ActionType::JexSwap => call
                 .jex(min)
                 .payment(payments)
@@ -259,31 +266,27 @@ pub trait Aggregator: storage::Storage {
                 .returns(ReturnsBackTransfersReset)
                 .sync_call(),
 
-            // ═══════════════════════════════════════════════════════════════
-            // Jex (Stable)
-            // ═══════════════════════════════════════════════════════════════
+            // --- Jex (Stable) ---
             types::ActionType::JexStableSwap(token_out) => call
-                .jex_swap_stable(token_out, min)
+                .jex_swap_stable(token_out, min * 2u64)
                 .payment(payments)
                 .returns(ReturnsBackTransfersReset)
                 .sync_call(),
             types::ActionType::JexStableAddLiquidity => call
-                .jex_add_liquidity_stable(min)
+                .jex_add_liquidity_stable(min * 2u64)
                 .payment(payments)
                 .returns(ReturnsBackTransfersReset)
                 .sync_call(),
             types::ActionType::JexStableRemoveLiquidity => call
-                .jex(min)
+                .jex(min * 2u64)
                 .payment(payments)
                 .returns(ReturnsBackTransfersReset)
                 .sync_call(),
 
-            // ═══════════════════════════════════════════════════════════════
-            // EGLD Wrapping
-            // ═══════════════════════════════════════════════════════════════
+            // --- EGLD Wrapping ---
             types::ActionType::Wrapping => call
                 .wrap_egld()
-                .payment(payments)
+                .egld(payments.get(0).amount.as_big_uint())
                 .returns(ReturnsBackTransfersReset)
                 .sync_call(),
             types::ActionType::UnWrapping => call
@@ -292,9 +295,7 @@ pub trait Aggregator: storage::Storage {
                 .returns(ReturnsBackTransfersReset)
                 .sync_call(),
 
-            // ═══════════════════════════════════════════════════════════════
-            // Liquid Staking
-            // ═══════════════════════════════════════════════════════════════
+            // --- Liquid Staking ---
             types::ActionType::XoxnoLiquidStaking | types::ActionType::LXoxnoLiquidStaking => call
                 .delegate(OptionalValue::<multiversx_sc::types::ManagedAddress<Self::Api>>::None)
                 .payment(payments)
@@ -302,13 +303,11 @@ pub trait Aggregator: storage::Storage {
                 .sync_call(),
             types::ActionType::HatomLiquidStaking => call
                 .delegate_hatom()
-                .payment(payments)
+                .egld(payments.get(0).amount.as_big_uint())
                 .returns(ReturnsBackTransfersReset)
                 .sync_call(),
 
-            // ═══════════════════════════════════════════════════════════════
-            // Hatom Lending
-            // ═══════════════════════════════════════════════════════════════
+            // --- Hatom Lending ---
             types::ActionType::HatomRedeem => call
                 .hatom_redeem(OptionalValue::<BigUint<Self::Api>>::None)
                 .payment(payments)
@@ -321,12 +320,13 @@ pub trait Aggregator: storage::Storage {
                 .sync_call(),
         };
 
+        // Standard result handling for non-add-liquidity operations
+        // (add_liquidity is handled at the start of this function via pre_balance_and_add_liquidity)
         let result = back_transfers.into_payment_vec();
         let result_len = result.len();
-        // 3. Deposit result(s) back to vault
         for funds in result.iter() {
             if result_len == 1 {
-                // For single-output operations, ensure minimum output
+                // For single-output operations, set prev_result for PrevAmount mode
                 vault.set_prev_result(&funds);
             }
             vault.deposit(&funds.token_identifier, &funds.amount);
@@ -359,7 +359,7 @@ pub trait Aggregator: storage::Storage {
                 ))
             },
             types::ActionType::OneDexSwap(_)
-            | types::ActionType::OneDexAddLiquidity
+            | types::ActionType::OneDexAddLiquidity(_)
             | types::ActionType::OneDexRemoveLiquidity => {
                 self.proxy_call(ManagedAddress::from(ONE_DEX_ROUTER))
             }
@@ -380,6 +380,208 @@ pub trait Aggregator: storage::Storage {
             }),
             types::ActionType::HatomSupply(token) => self.proxy_call(self.get_hatom_market(token)),
             _ => self.proxy_call(instr.address.clone().unwrap()),
+        }
+    }
+
+    // --- Pre-Balance Add Liquidity (Optimized ZAP) ---
+
+    /// Check if this action type is a CPMM add liquidity that can be pre-balanced
+    fn is_zappable_add_liquidity(&self, action: &types::ActionType<Self::Api>) -> bool {
+        matches!(
+            action,
+            types::ActionType::XExchangeAddLiquidity
+                | types::ActionType::OneDexAddLiquidity(_)
+                | types::ActionType::JexAddLiquidity
+        )
+    }
+
+    /// Pre-balance tokens and add liquidity in a single operation
+    ///
+    /// Instead of: add_liquidity → ZAP leftover → add_liquidity again
+    /// This does: compute optimal swap → swap → add_liquidity (once)
+    ///
+    /// Saves ~400k gas by avoiding the second add_liquidity call
+    fn pre_balance_and_add_liquidity(
+        &self,
+        vault: &mut Vault<Self::Api>,
+        instr: &Instruction<Self::Api>,
+        payments: &ManagedVec<Payment<Self::Api>>,
+    ) {
+        let min = BigUint::from(MIN_INTERNAL_OUTPUT);
+
+        // 1. Get pool info
+        let pool_address = self.resolve_pool_address(&instr.action, instr, payments);
+        let (reserve_first, reserve_second) = self.get_reserves(&instr.action, &pool_address);
+        let pool_first_token = self.get_pool_first_token(&instr.action, &pool_address);
+        let pool_second_token = self.get_pool_second_token(&instr.action, &pool_address);
+        let (fee_num, fee_denom) = self.get_fee(&instr.action, &pool_address);
+        let fee_mode = match &instr.action {
+            types::ActionType::JexAddLiquidity => zap::FeeMode::OnOutput,
+            _ => zap::FeeMode::OnInput,
+        };
+
+        // 2. Get current balances (payments are always in first, second order)
+        let balance_first = payments.get(0).amount.as_big_uint().clone();
+        let balance_second = payments.get(1).amount.as_big_uint().clone();
+        let token_first = payments.get(0).token_identifier.clone();
+        let token_second = payments.get(1).token_identifier.clone();
+
+        // 3. Compute optimal swap to balance tokens
+        let (swap_from_first, swap_amount) = zap::compute_optimal_pre_swap(
+            &balance_first,
+            &balance_second,
+            &reserve_first,
+            &reserve_second,
+            fee_num,
+            fee_denom,
+            fee_mode,
+        );
+
+        // 4. Execute swap if needed and compute final balances
+        let (final_first, final_second) = if swap_amount > 0u64 {
+            if swap_from_first {
+                // Swap some first token for second
+                let swap_payment = ManagedVec::from_single_item(Payment::new(
+                    token_first.clone(),
+                    0u64,
+                    swap_amount.clone().into_non_zero().unwrap(),
+                ));
+
+                let swap_result = match &instr.action {
+                    types::ActionType::XExchangeAddLiquidity => self
+                        .proxy_call(pool_address.clone())
+                        .xexchange(&pool_second_token, min.clone())
+                        .payment(&swap_payment)
+                        .returns(ReturnsBackTransfersReset)
+                        .sync_call(),
+                    types::ActionType::OneDexAddLiquidity(_) => {
+                        let mut path = MultiValueEncoded::new();
+                        path.push(pool_first_token.clone());
+                        path.push(pool_second_token.clone());
+                        self.proxy_call(ManagedAddress::from(ONE_DEX_ROUTER))
+                            .onedex(min.clone(), false, path)
+                            .payment(&swap_payment)
+                            .returns(ReturnsBackTransfersReset)
+                            .sync_call()
+                    }
+                    types::ActionType::JexAddLiquidity => self
+                        .proxy_call(pool_address.clone())
+                        .jex(min.clone())
+                        .payment(&swap_payment)
+                        .returns(ReturnsBackTransfersReset)
+                        .sync_call(),
+                    _ => return,
+                };
+
+                let received = swap_result.to_single_esdt().amount;
+                (&balance_first - &swap_amount, &balance_second + &received)
+            } else {
+                // Swap some second token for first
+                let swap_payment = ManagedVec::from_single_item(Payment::new(
+                    token_second.clone(),
+                    0u64,
+                    swap_amount.clone().into_non_zero().unwrap(),
+                ));
+
+                let swap_result = match &instr.action {
+                    types::ActionType::XExchangeAddLiquidity => self
+                        .proxy_call(pool_address.clone())
+                        .xexchange(&pool_first_token, min.clone())
+                        .payment(&swap_payment)
+                        .returns(ReturnsBackTransfersReset)
+                        .sync_call(),
+                    types::ActionType::OneDexAddLiquidity(_) => {
+                        let mut path = MultiValueEncoded::new();
+                        path.push(pool_second_token.clone());
+                        path.push(pool_first_token.clone());
+                        self.proxy_call(ManagedAddress::from(ONE_DEX_ROUTER))
+                            .onedex(min.clone(), false, path)
+                            .payment(&swap_payment)
+                            .returns(ReturnsBackTransfersReset)
+                            .sync_call()
+                    }
+                    types::ActionType::JexAddLiquidity => self
+                        .proxy_call(pool_address.clone())
+                        .jex(min.clone())
+                        .payment(&swap_payment)
+                        .returns(ReturnsBackTransfersReset)
+                        .sync_call(),
+                    _ => return,
+                };
+
+                let received = swap_result.to_single_esdt().amount;
+                (&balance_first + &received, &balance_second - &swap_amount)
+            }
+        } else {
+            // Already balanced, no swap needed
+            (balance_first, balance_second)
+        };
+
+        // 5. Create balanced payments for add_liquidity (always in first, second order)
+        let mut lp_payments = ManagedVec::new();
+        lp_payments.push(Payment::new(
+            token_first.clone(),
+            0u64,
+            final_first.into_non_zero().unwrap(),
+        ));
+        lp_payments.push(Payment::new(
+            token_second.clone(),
+            0u64,
+            final_second.into_non_zero().unwrap(),
+        ));
+
+        // 6. Execute SINGLE add_liquidity
+        let lp_result = self
+            .proxy_call(pool_address)
+            .xdex_add_liquidity(min.clone(), min)
+            .payment(&lp_payments)
+            .returns(ReturnsBackTransfersReset)
+            .sync_call();
+
+        // 7. Deposit all results to vault (LP tokens + any minimal dust)
+        for payment in lp_result.into_payment_vec().iter() {
+            vault.deposit(&payment.token_identifier, &payment.amount);
+        }
+    }
+
+    /// Resolve pool address for ZAP operations based on action type.
+    /// - xExchange: lookup from storage using token pair
+    /// - OneDex: use ONE_DEX_ROUTER constant
+    /// - Jex: use provided instruction address
+    fn resolve_pool_address(
+        &self,
+        action: &types::ActionType<Self::Api>,
+        instr: &Instruction<Self::Api>,
+        payments: &ManagedVec<Payment<Self::Api>>,
+    ) -> ManagedAddress {
+        match action {
+            types::ActionType::XExchangeAddLiquidity => {
+                // Look up pair address from storage using the two input tokens
+                let first_token = unsafe {
+                    payments
+                        .get(0)
+                        .token_identifier
+                        .clone()
+                        .into_esdt_unchecked()
+                };
+                let second_token = unsafe {
+                    payments
+                        .get(1)
+                        .token_identifier
+                        .clone()
+                        .into_esdt_unchecked()
+                };
+                self.get_pair_x(&first_token, &second_token)
+            }
+            types::ActionType::OneDexAddLiquidity(_) => {
+                // OneDex uses hardcoded router address
+                ManagedAddress::from(ONE_DEX_ROUTER)
+            }
+            types::ActionType::JexAddLiquidity => {
+                // Jex requires explicit address from instruction
+                instr.address.clone().unwrap()
+            }
+            _ => instr.address.clone().unwrap_or_else(ManagedAddress::zero),
         }
     }
 }

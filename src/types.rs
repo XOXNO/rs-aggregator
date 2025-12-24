@@ -24,7 +24,7 @@ pub enum ActionType<M: ManagedTypeApi> {
 
     // OneDex operations
     OneDexSwap(TokenIdentifier<M>), // Output token identifier
-    OneDexAddLiquidity,
+    OneDexAddLiquidity(usize),      // Pair ID
     OneDexRemoveLiquidity,
 
     // Jex CPMM operations
@@ -76,7 +76,7 @@ pub enum AmountMode<M: ManagedTypeApi> {
 #[type_abi]
 #[derive(TopEncode, TopDecode, NestedEncode, NestedDecode, Clone, ManagedVecItem)]
 pub struct InputArg<M: ManagedTypeApi> {
-    pub token: TokenId<M>,
+    pub token: ManagedBuffer<M>,
     pub mode: AmountMode<M>,
 }
 
@@ -87,7 +87,7 @@ pub struct Instruction<M: ManagedTypeApi> {
     /// Which DEX operation to perform
     pub action: ActionType<M>,
     /// List of input assets and amounts
-    pub inputs: ManagedVec<M, InputArg<M>>,
+    pub inputs: Option<ManagedVec<M, InputArg<M>>>,
     /// Pool contract address
     pub address: Option<ManagedAddress<M>>,
 }
@@ -99,4 +99,22 @@ pub struct Instruction<M: ManagedTypeApi> {
 pub struct PairTokens<M: ManagedTypeApi> {
     pub first_token_id: TokenIdentifier<M>,
     pub second_token_id: TokenIdentifier<M>,
+}
+
+#[type_abi]
+#[derive(TopEncode, TopDecode, Copy, Clone, PartialEq, Debug)]
+pub enum PairFee {
+    Percent04,
+    Percent06,
+    Percent10,
+}
+
+impl PairFee {
+    pub fn get_total_fee_percentage(&self) -> u64 {
+        match self {
+            PairFee::Percent04 => 40,  // 0.4%
+            PairFee::Percent06 => 60,  // 0.6%
+            PairFee::Percent10 => 100, // 1.0%
+        }
+    }
 }
