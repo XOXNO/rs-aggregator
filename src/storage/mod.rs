@@ -1,5 +1,5 @@
 use crate::constants::{HATOM_CONTROLLER, ONE_DEX_ROUTER, XEXCHANGE_ROUTER};
-use crate::types::{ActionType, PairFee, PairTokens};
+use crate::types::{ActionType, PairFee, PairTokens, ReferralConfig};
 
 multiversx_sc::imports!();
 
@@ -283,4 +283,25 @@ pub trait Storage {
         address: ManagedAddress,
         pair_id: usize,
     ) -> SingleValueMapper<PairFee, ManagedAddress>;
+
+    // =========================================================================
+    // Fee & Referral Storage (local contract storage)
+    // =========================================================================
+
+    #[storage_mapper("id")]
+    fn referral_id_counter(&self) -> SingleValueMapper<u64>;
+
+    #[view(getReferralConfig)]
+    #[storage_mapper("refConfig")]
+    fn referral_config(&self, id: u64) -> SingleValueMapper<ReferralConfig<Self::Api>>;
+
+    #[storage_mapper("refBalance")]
+    fn referrer_balances(&self, referral_id: u64) -> MapMapper<TokenIdentifier, BigUint>;
+
+    #[view(getStaticFee)]
+    #[storage_mapper("fee")]
+    fn static_fee(&self) -> SingleValueMapper<u32>;
+
+    #[storage_mapper("balances")]
+    fn admin_fees(&self) -> MapMapper<TokenIdentifier, BigUint>;
 }

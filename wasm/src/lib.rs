@@ -6,22 +6,39 @@
 
 // Init:                                 1
 // Upgrade:                              1
-// Endpoints:                            1
+// Endpoints:                           11
 // Async Callback (empty):               1
-// Total number of exported functions:   4
+// Total number of exported functions:  14
 
 #![no_std]
+#![cfg_attr(test, allow(unused))]
 
+// WASM-only: allocator and panic handler use VM externals not available in tests
+#[cfg(not(test))]
 multiversx_sc_wasm_adapter::allocator!();
+
+#[cfg(not(test))]
 multiversx_sc_wasm_adapter::panic_handler!();
 
+#[cfg(not(test))]
 multiversx_sc_wasm_adapter::endpoints! {
     aggregator
     (
         init => init
         upgrade => upgrade
         xo => aggregate
+        addReferral => add_referral
+        setReferralFee => set_referral_fee
+        setReferralActive => set_referral_active
+        setStaticFee => set_static_fee
+        claimReferralFees => claim_referral_fees
+        claimAdminFees => claim_admin_fees
+        getReferrerBalances => get_referrer_balances
+        getAdminFees => get_admin_fees_view
+        getReferralConfig => referral_config
+        getStaticFee => static_fee
     )
 }
 
+#[cfg(not(test))]
 multiversx_sc_wasm_adapter::async_callback_empty! {}

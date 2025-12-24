@@ -4,6 +4,10 @@ version = "0.0.0"
 edition = "2021"
 publish = false
 
+[[bin]]
+name = "aggregator-meta"
+path = "src/main.rs"
+
 [dependencies.aggregator]
 path = ".."
 

@@ -118,3 +118,150 @@ impl PairFee {
         }
     }
 }
+
+/// Referral configuration stored per referral ID
+#[type_abi]
+#[derive(TopEncode, TopDecode, NestedEncode, NestedDecode, Clone)]
+pub struct ReferralConfig<M: ManagedTypeApi> {
+    pub owner: ManagedAddress<M>,
+    pub fee: u32, // basis points (10,000 = 100%)
+    pub active: bool,
+}
+
+// =============================================================================
+// Compact Encoding Types (for efficient transaction payloads)
+// =============================================================================
+
+/// Compact action type as u8 for minimal encoding
+/// Maps to ActionType variants but without embedded data
+#[repr(u8)]
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum CompactAction {
+    // xExchange (0-2)
+    XExchangeSwap = 0,
+    XExchangeAddLiquidity = 1,
+    XExchangeRemoveLiquidity = 2,
+    // AshSwap V1 (3-5)
+    AshSwapPoolSwap = 3,
+    AshSwapPoolAddLiquidity = 4,
+    AshSwapPoolRemoveLiquidity = 5,
+    // AshSwap V2 (6-8)
+    AshSwapV2Swap = 6,
+    AshSwapV2AddLiquidity = 7,
+    AshSwapV2RemoveLiquidity = 8,
+    // OneDex (9-11)
+    OneDexSwap = 9,
+    OneDexAddLiquidity = 10,
+    OneDexRemoveLiquidity = 11,
+    // Jex CPMM (12-14)
+    JexSwap = 12,
+    JexAddLiquidity = 13,
+    JexRemoveLiquidity = 14,
+    // Jex Stable (15-17)
+    JexStableSwap = 15,
+    JexStableAddLiquidity = 16,
+    JexStableRemoveLiquidity = 17,
+    // EGLD wrapping (18-19)
+    Wrapping = 18,
+    UnWrapping = 19,
+    // Liquid staking (20-22)
+    XoxnoLiquidStaking = 20,
+    LXoxnoLiquidStaking = 21,
+    HatomLiquidStaking = 22,
+    // Hatom (23-24)
+    HatomRedeem = 23,
+    HatomSupply = 24,
+}
+
+impl CompactAction {
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::XExchangeSwap),
+            1 => Some(Self::XExchangeAddLiquidity),
+            2 => Some(Self::XExchangeRemoveLiquidity),
+            3 => Some(Self::AshSwapPoolSwap),
+            4 => Some(Self::AshSwapPoolAddLiquidity),
+            5 => Some(Self::AshSwapPoolRemoveLiquidity),
+            6 => Some(Self::AshSwapV2Swap),
+            7 => Some(Self::AshSwapV2AddLiquidity),
+            8 => Some(Self::AshSwapV2RemoveLiquidity),
+            9 => Some(Self::OneDexSwap),
+            10 => Some(Self::OneDexAddLiquidity),
+            11 => Some(Self::OneDexRemoveLiquidity),
+            12 => Some(Self::JexSwap),
+            13 => Some(Self::JexAddLiquidity),
+            14 => Some(Self::JexRemoveLiquidity),
+            15 => Some(Self::JexStableSwap),
+            16 => Some(Self::JexStableAddLiquidity),
+            17 => Some(Self::JexStableRemoveLiquidity),
+            18 => Some(Self::Wrapping),
+            19 => Some(Self::UnWrapping),
+            20 => Some(Self::XoxnoLiquidStaking),
+            21 => Some(Self::LXoxnoLiquidStaking),
+            22 => Some(Self::HatomLiquidStaking),
+            23 => Some(Self::HatomRedeem),
+            24 => Some(Self::HatomSupply),
+            _ => None,
+        }
+    }
+
+    /// Check if this action needs an output token parameter
+    pub fn needs_output_token(&self) -> bool {
+        matches!(
+            self,
+            Self::XExchangeSwap
+                | Self::AshSwapPoolSwap
+                | Self::OneDexSwap
+                | Self::JexStableSwap
+                | Self::HatomSupply
+        )
+    }
+
+    /// Check if this is an add_liquidity action that can be ZAPped
+    pub fn is_zappable(&self) -> bool {
+        matches!(
+            self,
+            Self::XExchangeAddLiquidity | Self::OneDexAddLiquidity | Self::JexAddLiquidity
+        )
+    }
+
+    /// Check if this is a stable/multi-asset add_liquidity (supports 3+ inputs)
+    /// Format: tok1, tok2, tok3, shared_mode, address
+    pub fn is_multi_input_add_liquidity(&self) -> bool {
+        matches!(
+            self,
+            Self::AshSwapPoolAddLiquidity
+                | Self::AshSwapV2AddLiquidity
+                | Self::JexStableAddLiquidity
+        )
+    }
+}
+
+/// Compact amount mode as u8
+/// 0 = All, 1 = Prev, 2-127 = Fixed amount index, 128-255 = PPM index
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum CompactMode {
+    All,
+    Prev,
+    Fixed(u8), // Index into amounts registry (amounts[idx] is the exact amount)
+    Ppm(u8),   // Index into amounts registry (amounts[idx] is the PPM value)
+}
+
+/// Threshold for PPM mode (values >= this are PPM indices)
+pub const MODE_PPM_THRESHOLD: u8 = 128;
+
+impl CompactMode {
+    pub fn from_u8(value: u8) -> Self {
+        match value {
+            0 => Self::All,
+            1 => Self::Prev,
+            v if v >= MODE_PPM_THRESHOLD => Self::Ppm(v - MODE_PPM_THRESHOLD),
+            v => Self::Fixed(v - 2), // 2-127 → amounts[0-125]
+        }
+    }
+}
+
+/// Special index values for compact encoding
+pub const IDX_NONE: u8 = 255;
+pub const IDX_EGLD: u8 = 254;
+pub const IDX_AUTO: u8 = 255;
