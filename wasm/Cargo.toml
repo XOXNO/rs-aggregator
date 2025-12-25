@@ -12,6 +12,7 @@ publish = false
 
 [lib]
 crate-type = ["cdylib"]
+test = false
 
 [profile.release]
 codegen-units = 1

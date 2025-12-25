@@ -74,7 +74,7 @@ pub trait Aggregator: storage::Storage {
         tokens: MultiValueEncodedCounted<TokenIdentifier<Self::Api>>,
         addresses: MultiValueEncodedCounted<ManagedAddress<Self::Api>>,
         amounts: MultiValueEncodedCounted<BigUint<Self::Api>>,
-        instructions: MultiValueEncoded<MultiValue6<u8, u8, u8, u8, u8, u8>>,
+        instructions: MultiValueEncoded<MultiValue6<u8, u8, u8, u8, u8, u16>>,
     ) {
         // 1. Initialize vault from incoming payments
         let payment = self.call_value().single();
@@ -90,17 +90,17 @@ pub trait Aggregator: storage::Storage {
 
         // 3. Execute each compact instruction sequentially
         for compact_instr in instructions {
-            let (action_byte, tok1_idx, mode1, tok2_idx, mode2, addr_idx) =
+            let (action_byte, byte1, byte2, byte3, byte4, pair_id_or_addr) =
                 compact_instr.into_tuple();
 
             // Decode instruction from compact format
             let instruction = self.decode_compact_instruction(
                 action_byte,
-                tok1_idx,
-                mode1,
-                tok2_idx,
-                mode2,
-                addr_idx,
+                byte1,
+                byte2,
+                byte3,
+                byte4,
+                pair_id_or_addr,
                 &token_registry,
                 &address_registry,
                 &amount_registry,
@@ -149,15 +149,23 @@ pub trait Aggregator: storage::Storage {
         }
     }
 
-    /// Decode a compact 6-byte instruction into a full Instruction struct
+    /// Decode a compact instruction into a full Instruction struct
+    ///
+    /// Format: MultiValue6<u8, u8, u8, u8, u8, u16>
+    ///
+    /// Layout for most actions:
+    ///   [action, tok1_idx, mode1, tok2_idx, mode2, addr_idx(u16)]
+    ///
+    /// Layout for OneDex add liquidity:
+    ///   [action, tok1, tok2, shared_mode, 0, pair_id(u16)]
     fn decode_compact_instruction(
         &self,
         action_byte: u8,
-        tok1_idx: u8,
-        mode1: u8,
-        tok2_idx: u8,
-        mode2: u8,
-        addr_idx: u8,
+        byte1: u8,
+        byte2: u8,
+        byte3: u8,
+        byte4: u8,
+        pair_id_or_addr: u16,
         tokens: &TokenRegistry<Self::Api>,
         addresses: &AddressRegistry<Self::Api>,
         amounts: &AmountRegistry<Self::Api>,
@@ -166,25 +174,25 @@ pub trait Aggregator: storage::Storage {
             .unwrap_or_else(|| sc_panic!("Invalid action type: {}", action_byte));
 
         // Build ActionType from compact action
-        let action = self.build_action_type(&compact_action, tok1_idx, tokens);
+        let action = self.build_action_type(&compact_action, byte1, pair_id_or_addr, tokens);
 
         // Build inputs based on action type
         let inputs = self.build_inputs(
             &compact_action,
-            tok1_idx,
-            mode1,
-            tok2_idx,
-            mode2,
-            addr_idx,
+            byte1,
+            byte2,
+            byte3,
+            byte4,
+            pair_id_or_addr,
             tokens,
             amounts,
         );
 
-        // Resolve address
-        let address = if addr_idx == IDX_AUTO {
+        // Resolve address (for OneDex add liquidity, addr is auto-resolved)
+        let address = if compact_action.needs_pair_id() || pair_id_or_addr as u8 == IDX_AUTO {
             None // Auto-resolved in dispatch
         } else {
-            Some(addresses.get(addr_idx as usize).clone())
+            Some(addresses.get(pair_id_or_addr as usize).clone())
         };
 
         Instruction {
@@ -195,47 +203,51 @@ pub trait Aggregator: storage::Storage {
     }
 
     /// Build ActionType from CompactAction, resolving output token where needed
+    ///
+    /// For most actions, byte1 is tok1_idx.
+    /// For OneDex add liquidity, pair_id is passed directly as u16.
     fn build_action_type(
         &self,
         compact: &CompactAction,
-        tok1_idx: u8,
+        byte1: u8,
+        pair_id_or_addr: u16,
         tokens: &TokenRegistry<Self::Api>,
     ) -> types::ActionType<Self::Api> {
         match compact {
             CompactAction::XExchangeSwap => {
-                let out_token = self.resolve_token(tok1_idx, tokens);
+                let out_token = self.resolve_token(byte1, tokens);
                 types::ActionType::XExchangeSwap(out_token)
             }
             CompactAction::XExchangeAddLiquidity => types::ActionType::XExchangeAddLiquidity,
             CompactAction::XExchangeRemoveLiquidity => types::ActionType::XExchangeRemoveLiquidity,
             CompactAction::AshSwapPoolSwap => {
-                let out_token = self.resolve_token(tok1_idx, tokens);
+                let out_token = self.resolve_token(byte1, tokens);
                 types::ActionType::AshSwapPoolSwap(out_token)
             }
             CompactAction::AshSwapPoolAddLiquidity => types::ActionType::AshSwapPoolAddLiquidity,
             CompactAction::AshSwapPoolRemoveLiquidity => {
-                // For remove liquidity, tok1_idx encodes the output token count
-                types::ActionType::AshSwapPoolRemoveLiquidity(tok1_idx as u32)
+                // For remove liquidity, byte1 encodes the output token count
+                types::ActionType::AshSwapPoolRemoveLiquidity(byte1 as u32)
             }
             CompactAction::AshSwapV2Swap => types::ActionType::AshSwapV2Swap,
             CompactAction::AshSwapV2AddLiquidity => types::ActionType::AshSwapV2AddLiquidity,
             CompactAction::AshSwapV2RemoveLiquidity => {
-                types::ActionType::AshSwapV2RemoveLiquidity(tok1_idx as u32)
+                types::ActionType::AshSwapV2RemoveLiquidity(byte1 as u32)
             }
             CompactAction::OneDexSwap => {
-                let out_token = self.resolve_token(tok1_idx, tokens);
+                let out_token = self.resolve_token(byte1, tokens);
                 types::ActionType::OneDexSwap(out_token)
             }
             CompactAction::OneDexAddLiquidity => {
-                // tok1_idx encodes the pair_id for OneDex
-                types::ActionType::OneDexAddLiquidity(tok1_idx as usize)
+                // pair_id is directly passed as u16
+                types::ActionType::OneDexAddLiquidity(pair_id_or_addr as usize)
             }
             CompactAction::OneDexRemoveLiquidity => types::ActionType::OneDexRemoveLiquidity,
             CompactAction::JexSwap => types::ActionType::JexSwap,
             CompactAction::JexAddLiquidity => types::ActionType::JexAddLiquidity,
             CompactAction::JexRemoveLiquidity => types::ActionType::JexRemoveLiquidity,
             CompactAction::JexStableSwap => {
-                let out_token = self.resolve_token(tok1_idx, tokens);
+                let out_token = self.resolve_token(byte1, tokens);
                 types::ActionType::JexStableSwap(out_token)
             }
             CompactAction::JexStableAddLiquidity => types::ActionType::JexStableAddLiquidity,
@@ -247,7 +259,7 @@ pub trait Aggregator: storage::Storage {
             CompactAction::HatomLiquidStaking => types::ActionType::HatomLiquidStaking,
             CompactAction::HatomRedeem => types::ActionType::HatomRedeem,
             CompactAction::HatomSupply => {
-                let out_token = self.resolve_token(tok1_idx, tokens);
+                let out_token = self.resolve_token(byte1, tokens);
                 types::ActionType::HatomSupply(out_token)
             }
         }
@@ -267,44 +279,42 @@ pub trait Aggregator: storage::Storage {
 
     /// Build inputs list from compact instruction bytes
     ///
+    /// Format: MultiValue6<u8, u8, u8, u8, u8, u16>
+    ///
     /// For swap actions (needs_output_token = true):
-    ///   - tok1_idx = output token (used in ActionType, not here)
-    ///   - mode1 = input token index
-    ///   - tok2_idx = input amount mode
-    ///   - mode2 = unused
+    ///   - byte1 = output token (used in ActionType, not here)
+    ///   - byte2 = input token index
+    ///   - byte3 = input amount mode
+    ///   - byte4 = unused
     ///
     /// For multi-input stable pool add_liquidity (3 tokens, shared mode):
-    ///   - tok1_idx = input1 token
-    ///   - mode1 = input2 token
-    ///   - tok2_idx = input3 token (or IDX_NONE for 2 inputs)
-    ///   - mode2 = shared mode for all inputs
+    ///   - byte1 = input1 token
+    ///   - byte2 = input2 token
+    ///   - byte3 = input3 token (or IDX_NONE for 2 inputs)
+    ///   - byte4 = shared mode for all inputs
     ///
     /// For dual-input actions (CPMM add liquidity):
-    ///   - tok1_idx = input1 token, mode1 = input1 mode
-    ///   - tok2_idx = input2 token, mode2 = input2 mode
+    ///   - byte1 = input1 token, byte2 = input1 mode
+    ///   - byte3 = input2 token, byte4 = input2 mode
     ///
-    /// For single-input actions:
-    ///   - tok1_idx = input token, mode1 = mode
-    ///   - tok2_idx = IDX_NONE
-    ///
-    /// For OneDex add_liquidity with pair_id:
-    ///   - tok1_idx = pair_id, mode1 = tok1, tok2_idx = mode1, mode2 = tok2, addr_idx = mode2
+    /// For OneDex add_liquidity:
+    ///   - byte1 = tok1, byte2 = tok2, byte3 = shared_mode, byte4 = 0, u16 = pair_id
     fn build_inputs(
         &self,
         compact_action: &CompactAction,
-        tok1_idx: u8,
-        mode1: u8,
-        tok2_idx: u8,
-        mode2: u8,
-        addr_idx: u8,
+        byte1: u8,
+        byte2: u8,
+        byte3: u8,
+        byte4: u8,
+        _pair_id_or_addr: u16,
         tokens: &TokenRegistry<Self::Api>,
         amounts: &AmountRegistry<Self::Api>,
     ) -> Option<ManagedVec<Self::Api, InputArg<Self::Api>>> {
         // For swap-like actions, byte layout is different:
-        // tok1_idx = output token (handled elsewhere), mode1 = input token, tok2_idx = input mode
+        // byte1 = output token (handled elsewhere), byte2 = input token, byte3 = input mode
         if compact_action.needs_output_token() {
-            let input_token_idx = mode1;
-            let input_mode = CompactMode::from_u8(tok2_idx);
+            let input_token_idx = byte2;
+            let input_mode = CompactMode::from_u8(byte3);
 
             // If mode is Prev and token is IDX_NONE, use prev_result
             if matches!(input_mode, CompactMode::Prev) && input_token_idx == IDX_NONE {
@@ -324,29 +334,29 @@ pub trait Aggregator: storage::Storage {
 
         // For stable/multi-asset add_liquidity: tok1, tok2, tok3, shared_mode
         if compact_action.is_multi_input_add_liquidity() {
-            let shared_mode = CompactMode::from_u8(mode2);
+            let shared_mode = CompactMode::from_u8(byte4);
             let amount_mode = self.compact_mode_to_amount_mode(&shared_mode, amounts);
 
             let mut inputs = ManagedVec::new();
 
             // Input 1 (always present)
             inputs.push(InputArg {
-                token: self.token_idx_to_buffer(tok1_idx, tokens),
+                token: self.token_idx_to_buffer(byte1, tokens),
                 mode: amount_mode.clone(),
             });
 
-            // Input 2 (mode1 is actually token2 index)
-            if mode1 != IDX_NONE {
+            // Input 2 (byte2 is token2 index)
+            if byte2 != IDX_NONE {
                 inputs.push(InputArg {
-                    token: self.token_idx_to_buffer(mode1, tokens),
+                    token: self.token_idx_to_buffer(byte2, tokens),
                     mode: amount_mode.clone(),
                 });
             }
 
-            // Input 3 (tok2_idx is actually token3 index)
-            if tok2_idx != IDX_NONE {
+            // Input 3 (byte3 is token3 index)
+            if byte3 != IDX_NONE {
                 inputs.push(InputArg {
-                    token: self.token_idx_to_buffer(tok2_idx, tokens),
+                    token: self.token_idx_to_buffer(byte3, tokens),
                     mode: amount_mode,
                 });
             }
@@ -354,11 +364,11 @@ pub trait Aggregator: storage::Storage {
             return Some(inputs);
         }
 
-        // For remove liquidity with output count: tok1_idx = count, mode1 = input token, tok2_idx = input mode
+        // For remove liquidity with output count: byte1 = count, byte2 = input token, byte3 = input mode
         // Layout: [action, count, in_tok, in_mode, 0, addr]
         if compact_action.needs_output_count() {
-            let input_token_idx = mode1;
-            let input_mode = CompactMode::from_u8(tok2_idx);
+            let input_token_idx = byte2;
+            let input_mode = CompactMode::from_u8(byte3);
 
             if matches!(input_mode, CompactMode::Prev) && input_token_idx == IDX_NONE {
                 return None;
@@ -372,38 +382,39 @@ pub trait Aggregator: storage::Storage {
             return Some(inputs);
         }
 
-        // For OneDex add liquidity with pair_id: tok1_idx = pair_id, inputs in bytes 2-5
-        // Layout: [action, pair_id, tok1, mode1, tok2, mode2]
+        // For OneDex add liquidity with u16 pair_id and shared mode
+        // Layout: [action, tok1, tok2, shared_mode, 0, pair_id(u16)]
         if compact_action.needs_pair_id() {
-            let token1_idx = mode1; // byte 2
-            let mode1_value = CompactMode::from_u8(tok2_idx); // byte 3
-            let token2_idx = mode2; // byte 4
-            let mode2_value = CompactMode::from_u8(addr_idx); // byte 5
+            let token1_idx = byte1;
+            let token2_idx = byte2;
+            let shared_mode = CompactMode::from_u8(byte3);
+            let amount_mode = self.compact_mode_to_amount_mode(&shared_mode, amounts);
 
             let mut inputs = ManagedVec::new();
             inputs.push(InputArg {
                 token: self.token_idx_to_buffer(token1_idx, tokens),
-                mode: self.compact_mode_to_amount_mode(&mode1_value, amounts),
+                mode: amount_mode.clone(),
             });
             inputs.push(InputArg {
                 token: self.token_idx_to_buffer(token2_idx, tokens),
-                mode: self.compact_mode_to_amount_mode(&mode2_value, amounts),
+                mode: amount_mode,
             });
             return Some(inputs);
         }
 
         // For standard dual-input actions (CPMM add liquidity)
-        let compact_mode1 = CompactMode::from_u8(mode1);
+        // Layout: [action, tok1, mode1, tok2, mode2, addr]
+        let compact_mode1 = CompactMode::from_u8(byte2);
 
         // If mode1 is Prev and token is IDX_NONE, use prev_result
-        if matches!(compact_mode1, CompactMode::Prev) && tok1_idx == IDX_NONE {
+        if matches!(compact_mode1, CompactMode::Prev) && byte1 == IDX_NONE {
             return None;
         }
 
         let mut inputs = ManagedVec::new();
 
         // First input
-        let token1_buf = self.token_idx_to_buffer(tok1_idx, tokens);
+        let token1_buf = self.token_idx_to_buffer(byte1, tokens);
         let amount_mode1 = self.compact_mode_to_amount_mode(&compact_mode1, amounts);
 
         inputs.push(InputArg {
@@ -412,9 +423,9 @@ pub trait Aggregator: storage::Storage {
         });
 
         // Second input (if present)
-        if tok2_idx != IDX_NONE {
-            let token2_buf = self.token_idx_to_buffer(tok2_idx, tokens);
-            let compact_mode2 = CompactMode::from_u8(mode2);
+        if byte3 != IDX_NONE {
+            let token2_buf = self.token_idx_to_buffer(byte3, tokens);
+            let compact_mode2 = CompactMode::from_u8(byte4);
             let amount_mode2 = self.compact_mode_to_amount_mode(&compact_mode2, amounts);
 
             inputs.push(InputArg {
