@@ -35,7 +35,7 @@ pub enum ActionType<M: ManagedTypeApi> {
     // Jex Stable operations
     JexStableSwap(TokenIdentifier<M>), // Output token identifier
     JexStableAddLiquidity,
-    JexStableRemoveLiquidity,
+    JexStableRemoveLiquidity(u32), // Count of output tokens
 
     // EGLD wrapping
     Wrapping,
@@ -241,7 +241,9 @@ impl CompactAction {
     pub fn needs_output_count(&self) -> bool {
         matches!(
             self,
-            Self::AshSwapPoolRemoveLiquidity | Self::AshSwapV2RemoveLiquidity
+            Self::AshSwapPoolRemoveLiquidity
+                | Self::AshSwapV2RemoveLiquidity
+                | Self::JexStableRemoveLiquidity
         )
     }
 

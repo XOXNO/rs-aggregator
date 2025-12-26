@@ -251,7 +251,9 @@ pub trait Aggregator: storage::Storage {
                 types::ActionType::JexStableSwap(out_token)
             }
             CompactAction::JexStableAddLiquidity => types::ActionType::JexStableAddLiquidity,
-            CompactAction::JexStableRemoveLiquidity => types::ActionType::JexStableRemoveLiquidity,
+            CompactAction::JexStableRemoveLiquidity => {
+                types::ActionType::JexStableRemoveLiquidity(byte1 as u32)
+            }
             CompactAction::Wrapping => types::ActionType::Wrapping,
             CompactAction::UnWrapping => types::ActionType::UnWrapping,
             CompactAction::XoxnoLiquidStaking => types::ActionType::XoxnoLiquidStaking,
@@ -613,6 +615,20 @@ pub trait Aggregator: storage::Storage {
                 .payment(payments)
                 .returns(ReturnsBackTransfersReset)
                 .sync_call(),
+            types::ActionType::JexStableRemoveLiquidity(out_tokens) => call
+                .ash_remove_liquidity_crypto(
+                    {
+                        let mut mv = ManagedVec::new();
+                        for _ in 0..*out_tokens {
+                            mv.push(min.clone());
+                        }
+                        mv
+                    },
+                    OptionalValue::<multiversx_sc::types::ManagedAddress<Self::Api>>::None,
+                )
+                .payment(payments)
+                .returns(ReturnsBackTransfersReset)
+                .sync_call(),
 
             // --- OneDex ---
             types::ActionType::OneDexSwap(token_out) => {
@@ -667,12 +683,6 @@ pub trait Aggregator: storage::Storage {
                 .payment(payments)
                 .returns(ReturnsBackTransfersReset)
                 .sync_call(),
-            types::ActionType::JexStableRemoveLiquidity => call
-                .jex(min * 2u64)
-                .payment(payments)
-                .returns(ReturnsBackTransfersReset)
-                .sync_call(),
-
             // --- EGLD Wrapping ---
             types::ActionType::Wrapping => call
                 .wrap_egld()
