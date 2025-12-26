@@ -616,16 +616,13 @@ pub trait Aggregator: storage::Storage {
                 .returns(ReturnsBackTransfersReset)
                 .sync_call(),
             types::ActionType::JexStableRemoveLiquidity(out_tokens) => call
-                .ash_remove_liquidity_crypto(
-                    {
-                        let mut mv = ManagedVec::new();
-                        for _ in 0..*out_tokens {
-                            mv.push(min.clone());
-                        }
-                        mv
-                    },
-                    OptionalValue::<multiversx_sc::types::ManagedAddress<Self::Api>>::None,
-                )
+                .jex_remove_liquidity_stable({
+                    let mut mv = MultiValueEncoded::new();
+                    for _ in 0..*out_tokens {
+                        mv.push(min.clone());
+                    }
+                    mv
+                })
                 .payment(payments)
                 .returns(ReturnsBackTransfersReset)
                 .sync_call(),

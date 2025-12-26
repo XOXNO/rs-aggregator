@@ -76,6 +76,10 @@ pub trait DexProxy {
     #[endpoint(addLiquidity)]
     fn jex_add_liquidity_stable(&self, min_shares: BigUint);
 
+    #[payable("*")]
+    #[endpoint(removeLiquidity)]
+    fn jex_remove_liquidity_stable(&self, token_amount_min: MultiValueEncoded<BigUint>);
+
     // ═══════════════════════════════════════════════════════════════════════════
     // AshSwap V1 (StableSwap)
     // ═══════════════════════════════════════════════════════════════════════════
