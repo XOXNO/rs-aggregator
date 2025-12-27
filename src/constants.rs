@@ -43,3 +43,6 @@ pub const HATOM_CONTROLLER: [u8; 32] =
 
 /// Minimum output amount for internal hops (prevents zero slippage)
 pub const MIN_INTERNAL_OUTPUT: u64 = 1;
+
+/// Basis points divisor (10,000 = 100%)
+pub const TOTAL_FEE: u32 = 10_000;

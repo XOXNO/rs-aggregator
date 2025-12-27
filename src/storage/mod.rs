@@ -1,4 +1,4 @@
-use crate::constants::{HATOM_CONTROLLER, ONE_DEX_ROUTER, XEXCHANGE_ROUTER};
+use crate::constants::{HATOM_CONTROLLER, ONE_DEX_ROUTER, TOTAL_FEE, XEXCHANGE_ROUTER};
 use crate::types::{ActionType, PairFee, PairTokens, ReferralConfig};
 
 multiversx_sc::imports!();
@@ -80,16 +80,16 @@ pub trait Storage {
             ActionType::OneDexAddLiquidity(pair_id) => {
                 let router = ManagedAddress::from(ONE_DEX_ROUTER);
                 let pair_fee = self.one_dex_pair_fee(router, *pair_id).get();
-                (pair_fee.get_total_fee_percentage(), 10_000)
+                (pair_fee.get_total_fee_percentage(), TOTAL_FEE as u64)
             }
             // JEX: liq_providers_fees + platform_fees with base 10,000
             ActionType::JexAddLiquidity => {
                 let lp_fees = self.jex_liq_providers_fees(pair_address.clone()).get();
                 let platform_fees = self.jex_platform_fees(pair_address.clone()).get();
-                ((lp_fees + platform_fees) as u64, 10_000)
+                ((lp_fees + platform_fees) as u64, TOTAL_FEE as u64)
             }
             // Other actions don't need fee for zap
-            _ => (0, 10_000),
+            _ => (0, TOTAL_FEE as u64),
         }
     }
 

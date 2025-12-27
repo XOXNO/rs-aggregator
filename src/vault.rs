@@ -1,5 +1,8 @@
 multiversx_sc::imports!();
 
+use crate::errors::{
+    ERR_INSUFFICIENT_BALANCE_PREFIX, ERR_ONLY_FUNGIBLE_PREFIX, ERR_TOKEN_NOT_FOUND_PREFIX,
+};
 use multiversx_sc::api::VMApi;
 
 /// In-memory vault for tracking intermediate token balances during aggregation
@@ -32,9 +35,7 @@ impl<M: VMApi> Vault<M> {
     pub fn from_payment(payment: Ref<Payment<M>>) -> Self {
         let mut vault = Self::new();
         if payment.token_nonce != 0 {
-            let mut buffer = ManagedBufferBuilder::<M>::new_from_slice(
-                b"Only fungible ESDT tokens are accepted, got ",
-            );
+            let mut buffer = ManagedBufferBuilder::<M>::new_from_slice(ERR_ONLY_FUNGIBLE_PREFIX);
             buffer.append_managed_buffer(payment.token_identifier.as_managed_buffer());
             let msg = buffer.into_managed_buffer();
             M::error_api_impl().signal_error_from_buffer(msg.get_handle());
@@ -47,8 +48,7 @@ impl<M: VMApi> Vault<M> {
     /// Get balance of a token (returns 0 if not found)
     pub fn balance_of(&self, token: &TokenId<M>) -> BigUint<M> {
         if !self.balances.contains(token) {
-            let mut buffer =
-                ManagedBufferBuilder::<M>::new_from_slice(b"Token not found in vault: ");
+            let mut buffer = ManagedBufferBuilder::<M>::new_from_slice(ERR_TOKEN_NOT_FOUND_PREFIX);
             buffer.append_managed_buffer(token.as_managed_buffer());
             let msg = buffer.into_managed_buffer();
             M::error_api_impl().signal_error_from_buffer(msg.get_handle());
@@ -73,7 +73,7 @@ impl<M: VMApi> Vault<M> {
         let current = self.balance_of(token);
         if &current < amount {
             let mut buffer =
-                ManagedBufferBuilder::<M>::new_from_slice(b"Insufficient vault balance for token ");
+                ManagedBufferBuilder::<M>::new_from_slice(ERR_INSUFFICIENT_BALANCE_PREFIX);
             buffer.append_managed_buffer(token.as_managed_buffer());
             let msg = buffer.into_managed_buffer();
             M::error_api_impl().signal_error_from_buffer(msg.get_handle());
