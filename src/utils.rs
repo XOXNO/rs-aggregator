@@ -30,11 +30,21 @@ pub trait Utils: crate::storage::Storage {
     /// Return only the output token to the caller, keep dust as protocol revenue
     fn return_vault_to_caller(&self, vault: Vault<Self::Api>, token_out: &TokenId<Self::Api>) {
         let caller = self.blockchain().get_caller();
+        let egld_token = TokenId::from(EGLD_000000_TOKEN_IDENTIFIER.as_bytes());
 
         for payment in vault.get_all_payments().iter() {
             if payment.token_identifier == *token_out {
                 // Send only the output token to caller
-                self.tx().to(&caller).payment(payment.clone()).transfer();
+                if payment.token_identifier == egld_token {
+                    // EGLD requires .egld() transfer, not .payment()
+                    self.tx()
+                        .to(&caller)
+                        .egld(payment.amount.as_big_uint())
+                        .transfer();
+                } else {
+                    // ESDT token transfer
+                    self.tx().to(&caller).payment(payment.clone()).transfer();
+                }
             } else {
                 // Keep all other tokens (dust) as protocol revenue
                 self.accumulate_admin_fee(&payment.token_identifier, payment.amount.as_big_uint());
