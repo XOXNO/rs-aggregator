@@ -67,29 +67,41 @@ pub trait Storage {
         }
     }
 
-    /// Get fee (fee_num, fee_denom) for a pair based on action type (only for add liquidity zap)
-    /// Returns the total fee that affects swap price calculation
-    fn get_fee(&self, action: &ActionType<Self::Api>, pair_address: &ManagedAddress) -> (u64, u64) {
+    /// Get fee (total_fee, lp_fee, fee_denom) for a pair based on action type (only for add liquidity zap)
+    /// Returns the total fee, LP fee (portion that stays in pool), and denominator
+    /// For fee-on-input DEXes (xExchange, OneDex), lp_fee equals total_fee (all stays in pool)
+    /// For fee-on-output DEXes (JEX), lp_fee is just the LP portion
+    fn get_fee(
+        &self,
+        action: &ActionType<Self::Api>,
+        pair_address: &ManagedAddress,
+    ) -> (u64, u64, u64) {
         match action {
             // xExchange: total_fee_percent with base 100,000
+            // All fees stay in pool (fee-on-input model)
             ActionType::XExchangeAddLiquidity => {
                 let total_fee = self.xexchange_total_fee_percent(pair_address.clone()).get();
-                (total_fee, 100_000)
+                (total_fee, total_fee, 100_000)
             }
             // OneDex: PairFee enum with base 10,000
+            // All fees stay in pool (fee-on-input model)
             ActionType::OneDexAddLiquidity(pair_id) => {
                 let router = ManagedAddress::from(ONE_DEX_ROUTER);
                 let pair_fee = self.one_dex_pair_fee(router, *pair_id).get();
-                (pair_fee.get_total_fee_percentage(), TOTAL_FEE as u64)
+                let total = pair_fee.get_total_fee_percentage();
+                (total, total, TOTAL_FEE as u64)
             }
             // JEX: liq_providers_fees + platform_fees with base 10,000
+            // Only LP fees stay in pool, platform fees leave (fee-on-output model)
             ActionType::JexAddLiquidity => {
                 let lp_fees = self.jex_liq_providers_fees(pair_address.clone()).get();
                 let platform_fees = self.jex_platform_fees(pair_address.clone()).get();
-                ((lp_fees + platform_fees) as u64, TOTAL_FEE as u64)
+                let total_fee = (lp_fees + platform_fees) as u64;
+                let lp_fee = lp_fees as u64;
+                (total_fee, lp_fee, TOTAL_FEE as u64)
             }
             // Other actions don't need fee for zap
-            _ => (0, TOTAL_FEE as u64),
+            _ => (0, 0, TOTAL_FEE as u64),
         }
     }
 

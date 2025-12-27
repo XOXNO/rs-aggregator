@@ -101,7 +101,10 @@ pub trait Aggregator: storage::Storage + config::Config + utils::Utils {
             self.execute_instruction(&mut vault, &instruction, &token_out_id);
         }
 
-        // 4. Verify minimum output amount
+        // 4. Apply fees before slippage check (0 = no referral)
+        self.apply_fees(&mut vault, &token_out_id, referral_id);
+
+        // 5. Verify minimum output amount AFTER fees
         let current_balance = vault.balance_of(&token_out_id);
 
         require!(
@@ -110,9 +113,6 @@ pub trait Aggregator: storage::Storage + config::Config + utils::Utils {
             current_balance,
             min_amount_out
         );
-
-        // 5. Apply fees before returning (0 = no referral)
-        self.apply_fees(&mut vault, &token_out_id, referral_id);
 
         // 6. Return only output token to caller, keep dust as protocol revenue
         self.return_vault_to_caller(vault, &token_out_id);

@@ -5,7 +5,8 @@ use crate::constants::{
     XEGLD_STAKING,
 };
 use crate::errors::{
-    ERR_PREV_AMOUNT_NOT_AVAILABLE, ERR_PREV_AMOUNT_TOKEN_MISMATCH, ERR_ZERO_INPUT_AMOUNT,
+    ERR_PPM_EXCEEDS_100_PERCENT, ERR_PREV_AMOUNT_NOT_AVAILABLE, ERR_PREV_AMOUNT_TOKEN_MISMATCH,
+    ERR_ZERO_INPUT_AMOUNT,
 };
 use crate::types::{
     AmountMode, CompactAction, CompactMode, InputArg, Instruction, IDX_AUTO, IDX_EGLD, IDX_NONE,
@@ -371,6 +372,8 @@ pub trait Utils: crate::storage::Storage {
                 // Read PPM value from amounts registry (stored as BigUint, convert to u32)
                 let ppm_value = amounts.get(*idx as usize);
                 let ppm_u64 = ppm_value.to_u64().unwrap_or(0);
+                // Validate PPM is within valid range (0 to 1,000,000)
+                require!(ppm_u64 <= 1_000_000, ERR_PPM_EXCEEDS_100_PERCENT);
                 AmountMode::Ppm(ppm_u64 as u32)
             }
         }
@@ -773,9 +776,11 @@ pub trait Utils: crate::storage::Storage {
         let (reserve_first, reserve_second) = self.get_reserves(&instr.action, &pool_address);
         let pool_first_token = self.get_pool_first_token(&instr.action, &pool_address);
         let pool_second_token = self.get_pool_second_token(&instr.action, &pool_address);
-        let (fee_num, fee_denom) = self.get_fee(&instr.action, &pool_address);
+        let (fee_num, lp_fee_num, fee_denom) = self.get_fee(&instr.action, &pool_address);
         let fee_mode = match &instr.action {
-            types::ActionType::JexAddLiquidity => zap::FeeMode::OnOutput,
+            // JEX uses fee-on-output with split fees (LP stays, protocol leaves)
+            types::ActionType::JexAddLiquidity => zap::FeeMode::OnOutput { lp_fee_num },
+            // xExchange and OneDex use fee-on-input (all fees stay in pool)
             _ => zap::FeeMode::OnInput,
         };
 

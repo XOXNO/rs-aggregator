@@ -15,10 +15,18 @@ pub enum FeeMode {
     /// Fee applied to input amount (xExchange, OneDex)
     /// output = (input * fee_factor * reserve_out) / (reserve_in * fee_denom + input * fee_factor)
     OnInput,
-    /// Fee applied to output amount (JEX)
-    /// raw_output = (input * reserve_out) / (reserve_in + input)
-    /// output = raw_output * fee_factor / fee_denom
-    OnOutput,
+    /// Fee applied to output amount with split fees (JEX)
+    ///
+    /// - lp_fee stays in pool (affects reserves)
+    /// - protocol_fee leaves pool (doesn't affect reserves)
+    ///
+    /// Formulas:
+    /// - raw_output = (input * reserve_out) / (reserve_in + input)
+    /// - output = raw_output * (fee_denom - total_fee) / fee_denom
+    /// - amount_leaving_pool = raw_output * (fee_denom - lp_fee) / fee_denom
+    ///
+    /// lp_fee_num: The LP portion of the fee that stays in the pool
+    OnOutput { lp_fee_num: u64 },
 }
 
 /// Simulate swap output for constant product AMM (no actual execution)
@@ -27,12 +35,12 @@ pub enum FeeMode {
 /// * `amount_in` - Amount of input token to swap
 /// * `reserve_in` - Reserve of input token in the pool
 /// * `reserve_out` - Reserve of output token in the pool
-/// * `fee_num` - Fee numerator (e.g., 300 for 0.3% on xExchange)
+/// * `fee_num` - Total fee numerator (e.g., 300 for 0.3% on xExchange)
 /// * `fee_denom` - Fee denominator (e.g., 100_000 for xExchange)
-/// * `fee_mode` - Whether fee is applied on input or output
+/// * `fee_mode` - Whether fee is applied on input or output (with LP fee info for OnOutput)
 ///
 /// # Returns
-/// (output_amount, raw_output_before_fee) - raw_output is needed for reserve calculation
+/// (output_amount, amount_leaving_reserves) - amount_leaving_reserves is used for reserve updates
 pub fn simulate_swap_output<M: ManagedTypeApi>(
     amount_in: &BigUint<M>,
     reserve_in: &BigUint<M>,
@@ -48,6 +56,11 @@ pub fn simulate_swap_output<M: ManagedTypeApi>(
         return (BigUint::zero(), BigUint::zero());
     }
 
+    // Safety check: fee_num should not exceed fee_denom
+    if fee_num > fee_denom {
+        return (BigUint::zero(), BigUint::zero());
+    }
+
     let fee_factor = fee_denom - fee_num;
 
     match fee_mode {
@@ -57,17 +70,30 @@ pub fn simulate_swap_output<M: ManagedTypeApi>(
             let numerator = amount_in * fee_factor * reserve_out;
             let denominator = reserve_in * fee_denom + amount_in * fee_factor;
             let output = &numerator / &denominator;
+            // For OnInput, all output leaves the reserves
             (output.clone(), output)
         }
-        FeeMode::OnOutput => {
-            // JEX: fee applied to output
+        FeeMode::OnOutput { lp_fee_num } => {
+            // JEX: fee applied to output with split fees
             // raw_output = (input * reserve_out) / (reserve_in + input)
-            // output = raw_output * fee_factor / fee_denom
+            // output = raw_output * (fee_denom - total_fee) / fee_denom  (what user gets)
+            // amount_leaving = raw_output * (fee_denom - lp_fee) / fee_denom  (what leaves pool)
+            //
+            // LP fee stays in pool, protocol fee + user output leaves pool
             let numerator = amount_in * reserve_out;
             let denominator = reserve_in + amount_in;
             let raw_output = &numerator / &denominator;
+
+            // What user receives (after all fees)
             let output = &raw_output * fee_factor / fee_denom;
-            (output, raw_output)
+
+            // What actually leaves the pool reserves (raw_output minus LP fee that stays)
+            // amount_leaving = raw_output - (raw_output * lp_fee_num / fee_denom)
+            //                = raw_output * (fee_denom - lp_fee_num) / fee_denom
+            let lp_fee_factor = fee_denom - lp_fee_num;
+            let amount_leaving = &raw_output * lp_fee_factor / fee_denom;
+
+            (output, amount_leaving)
         }
     }
 }
@@ -177,7 +203,8 @@ fn binary_search_pre_swap<M: ManagedTypeApi>(
         let mid = &low + &((&high - &low) / 2u64);
 
         // Simulate swap at midpoint
-        let (received, raw_output) =
+        // Returns (user_output, amount_leaving_reserves)
+        let (received, amount_leaving) =
             simulate_swap_output(&mid, reserve_in, reserve_out, fee_num, fee_denom, fee_mode);
 
         if received == BigUint::zero() {
@@ -190,8 +217,10 @@ fn binary_search_pre_swap<M: ManagedTypeApi>(
         let final_other_balance = other_balance + &received;
 
         // Calculate new reserves after swap
+        // reserve_in increases by full input amount
+        // reserve_out decreases by amount_leaving (accounts for LP fees staying in pool)
         let new_reserve_in = reserve_in + &mid;
-        let new_reserve_out = reserve_out - &raw_output;
+        let new_reserve_out = reserve_out - &amount_leaving;
 
         // Check if final balances are in ratio with new reserves
         // final_swap_balance / new_reserve_in vs final_other_balance / new_reserve_out

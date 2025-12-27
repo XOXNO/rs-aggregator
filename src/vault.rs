@@ -133,7 +133,12 @@ impl<M: VMApi> Vault<M> {
     }
 
     /// Calculate PPM (parts per million) of vault balance
+    /// PPM must be <= 1_000_000 (100%)
     pub fn ppm_of(&self, token: &TokenId<M>, ppm: &u32) -> BigUint<M> {
+        // Validate PPM range (should be caught earlier, but defense in depth)
+        if *ppm > 1_000_000 {
+            M::error_api_impl().signal_error(b"PPM exceeds 1,000,000 (100%)");
+        }
         let balance = self.balance_of(token);
         (&balance * *ppm) / 1_000_000u64
     }

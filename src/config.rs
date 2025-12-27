@@ -1,7 +1,10 @@
 multiversx_sc::imports!();
 
 use crate::constants::TOTAL_FEE;
-use crate::errors::{ERR_FEE_EXCEEDS_100, ERR_NOT_REFERRAL_OWNER, ERR_REFERRAL_NOT_FOUND};
+use crate::errors::{
+    ERR_FEE_EXCEEDS_100, ERR_NOT_REFERRAL_OWNER, ERR_REFERRAL_FEE_EXCEEDS_50,
+    ERR_REFERRAL_NOT_FOUND,
+};
 use crate::types;
 
 /// Admin configuration module for referral and fee management
@@ -11,10 +14,11 @@ pub trait Config: crate::storage::Storage {
 
     /// Add a new referral with the given owner and fee
     /// Returns the new referral ID
+    /// Note: Referral fee is capped at 50% because total fees = referral_fee + admin_fee (matching)
     #[only_owner]
     #[endpoint(addReferral)]
     fn add_referral(&self, owner: ManagedAddress, fee: u32) -> u64 {
-        require!(fee <= TOTAL_FEE, ERR_FEE_EXCEEDS_100);
+        require!(fee <= TOTAL_FEE / 2, ERR_REFERRAL_FEE_EXCEEDS_50);
         let id = self.referral_id_counter().update(|c| {
             *c += 1;
             *c
@@ -28,11 +32,12 @@ pub trait Config: crate::storage::Storage {
     }
 
     /// Update the fee for an existing referral
+    /// Note: Referral fee is capped at 50% because total fees = referral_fee + admin_fee (matching)
     #[only_owner]
     #[endpoint(setReferralFee)]
     fn set_referral_fee(&self, id: u64, fee: u32) {
         require!(!self.referral_config(id).is_empty(), ERR_REFERRAL_NOT_FOUND);
-        require!(fee <= TOTAL_FEE, ERR_FEE_EXCEEDS_100);
+        require!(fee <= TOTAL_FEE / 2, ERR_REFERRAL_FEE_EXCEEDS_50);
         self.referral_config(id).update(|c| c.fee = fee);
     }
 
