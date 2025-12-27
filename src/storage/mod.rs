@@ -308,12 +308,12 @@ pub trait Storage {
     fn referral_config(&self, id: u64) -> SingleValueMapper<ReferralConfig<Self::Api>>;
 
     #[storage_mapper("refBalance")]
-    fn referrer_balances(&self, referral_id: u64) -> MapMapper<TokenIdentifier, BigUint>;
+    fn referrer_balances(&self, referral_id: u64) -> MapMapper<TokenId, BigUint>;
 
     #[view(getStaticFee)]
     #[storage_mapper("fee")]
     fn static_fee(&self) -> SingleValueMapper<u32>;
 
     #[storage_mapper("balances")]
-    fn admin_fees(&self) -> MapMapper<TokenIdentifier, BigUint>;
+    fn admin_fees(&self) -> MapMapper<TokenId, BigUint>;
 }

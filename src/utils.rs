@@ -30,21 +30,10 @@ pub trait Utils: crate::storage::Storage {
     /// Return only the output token to the caller, keep dust as protocol revenue
     fn return_vault_to_caller(&self, vault: Vault<Self::Api>, token_out: &TokenId<Self::Api>) {
         let caller = self.blockchain().get_caller();
-        let egld_token = TokenId::from(EGLD_000000_TOKEN_IDENTIFIER.as_bytes());
 
         for payment in vault.get_all_payments().iter() {
             if payment.token_identifier == *token_out {
-                // Send only the output token to caller
-                if payment.token_identifier == egld_token {
-                    // EGLD requires .egld() transfer, not .payment()
-                    self.tx()
-                        .to(&caller)
-                        .egld(payment.amount.as_big_uint())
-                        .transfer();
-                } else {
-                    // ESDT token transfer
-                    self.tx().to(&caller).payment(payment.clone()).transfer();
-                }
+                self.tx().to(&caller).payment(payment.clone()).transfer();
             } else {
                 // Keep all other tokens (dust) as protocol revenue
                 self.accumulate_admin_fee(&payment.token_identifier, payment.amount.as_big_uint());
@@ -739,19 +728,14 @@ pub trait Utils: crate::storage::Storage {
         token: &TokenId<Self::Api>,
         amount: &BigUint<Self::Api>,
     ) {
-        let token_id: TokenIdentifier<Self::Api> = token.clone().into();
-        let current = self
-            .referrer_balances(id)
-            .get(&token_id)
-            .unwrap_or_default();
+        let current = self.referrer_balances(id).get(token).unwrap_or_default();
         self.referrer_balances(id)
-            .insert(token_id, &current + amount);
+            .insert(token.clone(), &current + amount);
     }
 
     fn accumulate_admin_fee(&self, token: &TokenId<Self::Api>, amount: &BigUint<Self::Api>) {
-        let token_id: TokenIdentifier<Self::Api> = token.clone().into();
-        let current = self.admin_fees().get(&token_id).unwrap_or_default();
-        self.admin_fees().insert(token_id, &current + amount);
+        let current = self.admin_fees().get(token).unwrap_or_default();
+        self.admin_fees().insert(token.clone(), &current + amount);
     }
 
     // --- Pre-Balance Add Liquidity (Optimized ZAP) ---

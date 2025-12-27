@@ -82,7 +82,7 @@ pub trait Config: crate::storage::Storage {
         let mut payments = ManagedVec::new();
         for (token, amount) in self.referrer_balances(referral_id).iter() {
             if amount > 0u64 {
-                payments.push(EsdtTokenPayment::new(token.clone(), 0, amount));
+                payments.push(Payment::new(token.clone(), 0, amount.into_non_zero().unwrap()));
             }
         }
 
@@ -102,7 +102,7 @@ pub trait Config: crate::storage::Storage {
         let mut payments = ManagedVec::new();
         for (token, amount) in self.admin_fees().iter() {
             if amount > 0u64 {
-                payments.push(EsdtTokenPayment::new(token.clone(), 0, amount));
+                payments.push(Payment::new(token.clone(), 0, amount.into_non_zero().unwrap()));
             }
         }
 
@@ -121,7 +121,7 @@ pub trait Config: crate::storage::Storage {
     fn get_referrer_balances(
         &self,
         referral_id: u64,
-    ) -> MultiValueEncoded<(TokenIdentifier, BigUint)> {
+    ) -> MultiValueEncoded<(TokenId<Self::Api>, BigUint<Self::Api>)> {
         let mut result = MultiValueEncoded::new();
         for (token, amount) in self.referrer_balances(referral_id).iter() {
             result.push((token, amount));
@@ -131,7 +131,7 @@ pub trait Config: crate::storage::Storage {
 
     /// Get all accumulated admin fees
     #[view(getAdminFees)]
-    fn get_admin_fees_view(&self) -> MultiValueEncoded<(TokenIdentifier, BigUint)> {
+    fn get_admin_fees_view(&self) -> MultiValueEncoded<(TokenId<Self::Api>, BigUint<Self::Api>)> {
         let mut result = MultiValueEncoded::new();
         for (token, amount) in self.admin_fees().iter() {
             result.push((token, amount));
