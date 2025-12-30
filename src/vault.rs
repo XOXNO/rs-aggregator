@@ -4,6 +4,7 @@ use crate::errors::{
     ERR_INSUFFICIENT_BALANCE_PREFIX, ERR_ONLY_FUNGIBLE_PREFIX, ERR_TOKEN_NOT_FOUND_PREFIX,
 };
 use multiversx_sc::api::VMApi;
+use multiversx_sc::chain_core::EGLD_000000_TOKEN_IDENTIFIER;
 
 /// In-memory vault for tracking intermediate token balances during aggregation
 /// Uses ManagedMapEncoded for O(1) key-value access
@@ -40,8 +41,21 @@ impl<M: VMApi> Vault<M> {
             let msg = buffer.into_managed_buffer();
             M::error_api_impl().signal_error_from_buffer(msg.get_handle());
         }
-        // deposit handles tokens list management now
-        vault.deposit(&payment.token_identifier, &payment.amount);
+
+        // Normalize: empty token identifier or EGLD-000000 -> EGLD-000000
+        // SC-to-SC calls may send EGLD with empty identifier (old standard)
+        // Direct user calls may have EGLD-000000 already
+        let token_buf = payment.token_identifier.as_managed_buffer();
+        let is_egld = token_buf.is_empty()
+            || token_buf == &ManagedBuffer::from(EGLD_000000_TOKEN_IDENTIFIER.as_bytes());
+
+        let token_id = if is_egld {
+            TokenId::from(EGLD_000000_TOKEN_IDENTIFIER.as_bytes())
+        } else {
+            payment.token_identifier.clone()
+        };
+
+        vault.deposit(&token_id, &payment.amount);
         vault
     }
 

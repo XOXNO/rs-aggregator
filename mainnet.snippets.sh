@@ -81,7 +81,7 @@ setStaticFee() {
 claimAdminFees() {
     recipient=$1
     mxpy contract call ${ADDRESS} --function=claimAdminFees \
-    --arguments ${recipient} \
+    --arguments addr:${recipient} \
     --ledger \
     --gas-limit=50000000 --send --proxy=${PROXY} --chain=1
 }
