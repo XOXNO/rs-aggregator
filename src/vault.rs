@@ -34,7 +34,7 @@ impl<M: VMApi> Vault<M> {
     }
 
     /// Initialize vault from a single ESDT payment
-    pub fn from_payment(payment: Ref<Payment<M>>) -> Self {
+    pub fn from_payment(payment: EgldOrEsdtTokenPayment<M>) -> Self {
         let mut vault = Self::new();
         if payment.token_nonce != 0 {
             let mut buffer = ManagedBufferBuilder::<M>::new_from_slice(ERR_ONLY_FUNGIBLE_PREFIX);
@@ -48,16 +48,17 @@ impl<M: VMApi> Vault<M> {
         // Direct user calls may have EGLD-000000 already
         let token_buf = payment.token_identifier.as_managed_buffer();
         let is_egld = token_buf.is_empty()
+            || payment.token_identifier.is_egld()
             || token_buf == &ManagedBuffer::from(EGLD_TOKEN_IDENTIFIER.as_bytes())
             || token_buf == &ManagedBuffer::from(EGLD_000000_TOKEN_IDENTIFIER.as_bytes());
 
         let token_id = if is_egld {
             TokenId::from(EGLD_000000_TOKEN_IDENTIFIER.as_bytes())
         } else {
-            payment.token_identifier.clone()
+            TokenId::from(payment.token_identifier.clone())
         };
 
-        vault.deposit(&token_id, &payment.amount);
+        vault.deposit(&token_id, &payment.amount.clone().into_non_zero().unwrap());
         vault
     }
 
@@ -88,9 +89,15 @@ impl<M: VMApi> Vault<M> {
     pub fn withdraw(&mut self, token: &TokenId<M>, amount: &BigUint<M>) -> BigUint<M> {
         let current = self.balance_of(token);
         if &current < amount {
+            // Build detailed error: "Insufficient vault balance for token X: have Y, need Z"
             let mut buffer =
                 ManagedBufferBuilder::<M>::new_from_slice(ERR_INSUFFICIENT_BALANCE_PREFIX);
             buffer.append_managed_buffer(token.as_managed_buffer());
+            buffer.append_managed_buffer(&ManagedBuffer::from(b": have "));
+            buffer.append_managed_buffer(&current.to_display());
+            buffer.append_managed_buffer(&ManagedBuffer::from(b", need "));
+            buffer.append_managed_buffer(&amount.to_display());
+
             let msg = buffer.into_managed_buffer();
             M::error_api_impl().signal_error_from_buffer(msg.get_handle());
         }
