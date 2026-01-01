@@ -5,6 +5,7 @@ use crate::errors::{
 };
 use multiversx_sc::api::VMApi;
 use multiversx_sc::chain_core::EGLD_000000_TOKEN_IDENTIFIER;
+pub const EGLD_TOKEN_IDENTIFIER: &str = "EGLD";
 
 /// In-memory vault for tracking intermediate token balances during aggregation
 /// Uses ManagedMapEncoded for O(1) key-value access
@@ -47,6 +48,7 @@ impl<M: VMApi> Vault<M> {
         // Direct user calls may have EGLD-000000 already
         let token_buf = payment.token_identifier.as_managed_buffer();
         let is_egld = token_buf.is_empty()
+            || token_buf == &ManagedBuffer::from(EGLD_TOKEN_IDENTIFIER.as_bytes())
             || token_buf == &ManagedBuffer::from(EGLD_000000_TOKEN_IDENTIFIER.as_bytes());
 
         let token_id = if is_egld {
