@@ -62,7 +62,7 @@ impl<M: VMApi> Vault<M> {
         vault
     }
 
-    /// Get balance of a token (returns 0 if not found)
+    /// Get balance of a token (panics if not found)
     pub fn balance_of(&self, token: &TokenId<M>) -> BigUint<M> {
         if !self.balances.contains(token) {
             let mut buffer = ManagedBufferBuilder::<M>::new_from_slice(ERR_TOKEN_NOT_FOUND_PREFIX);
@@ -112,8 +112,7 @@ impl<M: VMApi> Vault<M> {
         amount.clone()
     }
 
-    /// Withdraw entire balance of a token
-    /// Returns 0 if token not found
+    /// Withdraw entire balance of a token (panics if not found)
     pub fn withdraw_all(&mut self, token: &TokenId<M>) -> BigUint<M> {
         let amount = self.balance_of(token);
         if amount > 0u64 {

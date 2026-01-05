@@ -9,7 +9,6 @@ pub const ERR_FEE_EXCEEDS_100: &str = "Fee exceeds 100%";
 pub const ERR_REFERRAL_FEE_EXCEEDS_50: &str =
     "Referral fee exceeds 50% (total fees would exceed 100%)";
 pub const ERR_REFERRAL_NOT_FOUND: &str = "Referral not found";
-pub const ERR_NOT_REFERRAL_OWNER: &str = "Not referral owner";
 pub const ERR_PPM_EXCEEDS_100_PERCENT: &str = "PPM value exceeds 1,000,000 (100%)";
 
 // ═══════════════════════════════════════════════════════════════════════════════

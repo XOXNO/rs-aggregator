@@ -1,10 +1,7 @@
 multiversx_sc::imports!();
 
 use crate::constants::TOTAL_FEE;
-use crate::errors::{
-    ERR_FEE_EXCEEDS_100, ERR_NOT_REFERRAL_OWNER, ERR_REFERRAL_FEE_EXCEEDS_50,
-    ERR_REFERRAL_NOT_FOUND,
-};
+use crate::errors::{ERR_FEE_EXCEEDS_100, ERR_REFERRAL_FEE_EXCEEDS_50, ERR_REFERRAL_NOT_FOUND};
 use crate::types;
 
 /// Admin configuration module for referral and fee management
@@ -68,7 +65,8 @@ pub trait Config: crate::storage::Storage {
     // --- Claim Endpoints ---
 
     /// Claim accumulated referral fees for a given referral ID
-    /// Can only be called by the referral owner
+    /// Can be called by anyone, fees are always sent to the referral owner
+    /// Limited to 90 unique tokens per call to prevent out-of-gas
     #[endpoint(claimReferralFees)]
     fn claim_referral_fees(&self, referral_id: u64) {
         require!(
@@ -76,18 +74,28 @@ pub trait Config: crate::storage::Storage {
             ERR_REFERRAL_NOT_FOUND
         );
         let config = self.referral_config(referral_id).get();
-        let caller = self.blockchain().get_caller();
-        require!(caller == config.owner, ERR_NOT_REFERRAL_OWNER);
 
         let mut payments = ManagedVec::new();
+        let mut claimed_tokens = ManagedVec::<Self::Api, TokenId<Self::Api>>::new();
+
         for (token, amount) in self.referrer_balances(referral_id).iter() {
+            if payments.len() >= 90 {
+                break;
+            }
             if amount > 0u64 {
-                payments.push(Payment::new(token.clone(), 0, amount.into_non_zero().unwrap()));
+                payments.push(Payment::new(
+                    token.clone(),
+                    0,
+                    amount.into_non_zero().unwrap(),
+                ));
+                claimed_tokens.push(token);
             }
         }
 
-        // Clear all balances
-        self.referrer_balances(referral_id).clear();
+        // Clear only claimed tokens
+        for token in claimed_tokens.iter() {
+            self.referrer_balances(referral_id).remove(&token);
+        }
 
         if !payments.is_empty() {
             self.tx().to(&config.owner).payment(&payments).transfer();
@@ -96,18 +104,31 @@ pub trait Config: crate::storage::Storage {
 
     /// Claim accumulated admin fees
     /// Can only be called by the contract owner
+    /// Limited to 90 unique tokens per call to prevent out-of-gas
     #[only_owner]
     #[endpoint(claimAdminFees)]
     fn claim_admin_fees(&self, recipient: ManagedAddress) {
         let mut payments = ManagedVec::new();
+        let mut claimed_tokens = ManagedVec::<Self::Api, TokenId<Self::Api>>::new();
+
         for (token, amount) in self.admin_fees().iter() {
+            if payments.len() >= 90 {
+                break;
+            }
             if amount > 0u64 {
-                payments.push(Payment::new(token.clone(), 0, amount.into_non_zero().unwrap()));
+                payments.push(Payment::new(
+                    token.clone(),
+                    0,
+                    amount.into_non_zero().unwrap(),
+                ));
+                claimed_tokens.push(token);
             }
         }
 
-        // Clear all balances
-        self.admin_fees().clear();
+        // Clear only claimed tokens
+        for token in claimed_tokens.iter() {
+            self.admin_fees().remove(&token);
+        }
 
         if !payments.is_empty() {
             self.tx().to(&recipient).payment(&payments).transfer();
