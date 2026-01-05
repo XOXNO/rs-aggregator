@@ -114,7 +114,13 @@ pub fn simulate_swap_output<M: ManagedTypeApi>(
 /// (swap_from_first, swap_amount):
 /// - If swap_from_first is true: swap `swap_amount` of first token for second
 /// - If swap_from_first is false: swap `swap_amount` of second token for first
-/// - If swap_amount is 0: tokens are already balanced
+/// - If swap_amount is 0: tokens are already balanced (within tolerance)
+
+/// Tolerance threshold for considering tokens "balanced" (0.1% = 1/1000)
+/// If the ratio difference is within this threshold, skip the swap to avoid
+/// failed swaps due to reserve staleness between quote time and execution time.
+const BALANCE_TOLERANCE_DENOM: u64 = 1000;
+
 pub fn compute_optimal_pre_swap<M: ManagedTypeApi>(
     balance_first: &BigUint<M>,
     balance_second: &BigUint<M>,
@@ -138,6 +144,24 @@ pub fn compute_optimal_pre_swap<M: ManagedTypeApi>(
     // Cross multiply: balance_first * reserve_second vs balance_second * reserve_first
     let product_first = balance_first * reserve_second;
     let product_second = balance_second * reserve_first;
+
+    // Calculate tolerance: 0.1% of the average product
+    // This prevents unnecessary swaps when tokens are nearly balanced,
+    // which can fail due to reserve changes between quote and execution.
+    let sum = &product_first + &product_second;
+    let tolerance = &sum / BALANCE_TOLERANCE_DENOM;
+
+    // Check if within tolerance (nearly balanced)
+    let diff = if &product_first > &product_second {
+        &product_first - &product_second
+    } else {
+        &product_second - &product_first
+    };
+
+    if diff <= tolerance {
+        // Already balanced within tolerance, no swap needed
+        return (true, BigUint::zero());
+    }
 
     if product_first > product_second {
         // First token is in excess, need to swap some first → second
