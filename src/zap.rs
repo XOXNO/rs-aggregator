@@ -14,7 +14,10 @@ pub const MAX_BINARY_SEARCH_ITERATIONS: u32 = 128;
 pub enum FeeMode {
     /// Fee applied to input amount (xExchange, OneDex)
     /// output = (input * fee_factor * reserve_out) / (reserve_in * fee_denom + input * fee_factor)
-    OnInput,
+    ///
+    /// For xExchange: special_fee leaves pool (burned/sent to fees collector)
+    /// reserve_in += (input - special_fee), NOT full input
+    OnInput { special_fee_num: u64 },
     /// Fee applied to output amount with split fees (JEX)
     ///
     /// - lp_fee stays in pool (affects reserves)
@@ -37,10 +40,10 @@ pub enum FeeMode {
 /// * `reserve_out` - Reserve of output token in the pool
 /// * `fee_num` - Total fee numerator (e.g., 300 for 0.3% on xExchange)
 /// * `fee_denom` - Fee denominator (e.g., 100_000 for xExchange)
-/// * `fee_mode` - Whether fee is applied on input or output (with LP fee info for OnOutput)
+/// * `fee_mode` - Whether fee is applied on input or output (with fee split info)
 ///
 /// # Returns
-/// (output_amount, amount_leaving_reserves) - amount_leaving_reserves is used for reserve updates
+/// (output_amount, amount_out_leaving, amount_in_to_reserves)
 pub fn simulate_swap_output<M: ManagedTypeApi>(
     amount_in: &BigUint<M>,
     reserve_in: &BigUint<M>,
@@ -48,30 +51,36 @@ pub fn simulate_swap_output<M: ManagedTypeApi>(
     fee_num: u64,
     fee_denom: u64,
     fee_mode: FeeMode,
-) -> (BigUint<M>, BigUint<M>) {
+) -> (BigUint<M>, BigUint<M>, BigUint<M>) {
     if amount_in == &BigUint::zero()
         || reserve_in == &BigUint::zero()
         || reserve_out == &BigUint::zero()
     {
-        return (BigUint::zero(), BigUint::zero());
+        return (BigUint::zero(), BigUint::zero(), BigUint::zero());
     }
 
     // Safety check: fee_num should not exceed fee_denom
     if fee_num > fee_denom {
-        return (BigUint::zero(), BigUint::zero());
+        return (BigUint::zero(), BigUint::zero(), BigUint::zero());
     }
 
     let fee_factor = fee_denom - fee_num;
 
     match fee_mode {
-        FeeMode::OnInput => {
+        FeeMode::OnInput { special_fee_num } => {
             // xExchange/OneDex: fee applied to input
             // output = (input * fee_factor * reserve_out) / (reserve_in * fee_denom + input * fee_factor)
             let numerator = amount_in * fee_factor * reserve_out;
             let denominator = reserve_in * fee_denom + amount_in * fee_factor;
             let output = &numerator / &denominator;
-            // For OnInput, all output leaves the reserves
-            (output.clone(), output)
+
+            // For xExchange: special_fee leaves the pool (burned/sent to fees collector)
+            // amount_in_to_reserves = amount_in - special_fee
+            // For OneDex: special_fee_num = 0, so full amount goes to reserves
+            let special_fee = amount_in * special_fee_num / fee_denom;
+            let amount_in_to_reserves = amount_in - &special_fee;
+
+            (output.clone(), output, amount_in_to_reserves)
         }
         FeeMode::OnOutput { lp_fee_num } => {
             // JEX: fee applied to output with split fees
@@ -91,9 +100,10 @@ pub fn simulate_swap_output<M: ManagedTypeApi>(
             // amount_leaving = raw_output - (raw_output * lp_fee_num / fee_denom)
             //                = raw_output * (fee_denom - lp_fee_num) / fee_denom
             let lp_fee_factor = fee_denom - lp_fee_num;
-            let amount_leaving = &raw_output * lp_fee_factor / fee_denom;
+            let amount_out_leaving = &raw_output * lp_fee_factor / fee_denom;
 
-            (output, amount_leaving)
+            // For OnOutput, all input goes to reserves
+            (output, amount_out_leaving, amount_in.clone())
         }
     }
 }
@@ -114,12 +124,7 @@ pub fn simulate_swap_output<M: ManagedTypeApi>(
 /// (swap_from_first, swap_amount):
 /// - If swap_from_first is true: swap `swap_amount` of first token for second
 /// - If swap_from_first is false: swap `swap_amount` of second token for first
-/// - If swap_amount is 0: tokens are already balanced (within tolerance)
-
-/// Tolerance threshold for considering tokens "balanced" (0.1% = 1/1000)
-/// If the ratio difference is within this threshold, skip the swap to avoid
-/// failed swaps due to reserve staleness between quote time and execution time.
-const BALANCE_TOLERANCE_DENOM: u64 = 1000;
+/// - If swap_amount is 0: tokens are already perfectly balanced
 
 pub fn compute_optimal_pre_swap<M: ManagedTypeApi>(
     balance_first: &BigUint<M>,
@@ -145,23 +150,10 @@ pub fn compute_optimal_pre_swap<M: ManagedTypeApi>(
     let product_first = balance_first * reserve_second;
     let product_second = balance_second * reserve_first;
 
-    // Calculate tolerance: 0.1% of the average product
-    // This prevents unnecessary swaps when tokens are nearly balanced,
-    // which can fail due to reserve changes between quote and execution.
-    let sum = &product_first + &product_second;
-    let tolerance = &sum / BALANCE_TOLERANCE_DENOM;
-
-    // Check if within tolerance (nearly balanced)
-    let diff = if &product_first > &product_second {
-        &product_first - &product_second
-    } else {
-        &product_second - &product_first
-    };
-
-    if diff <= tolerance {
-        // Already balanced within tolerance, no swap needed
-        return (true, BigUint::zero());
-    }
+    // NOTE: We intentionally do NOT have a tolerance check here.
+    // Even when tokens are "nearly balanced", the SC's quote() uses truncated
+    // integer division which creates dust. We must always compute the optimal
+    // swap amount to minimize dust, regardless of how close the ratios are.
 
     if product_first > product_second {
         // First token is in excess, need to swap some first → second
@@ -195,7 +187,13 @@ pub fn compute_optimal_pre_swap<M: ManagedTypeApi>(
     }
 }
 
-/// Binary search to find optimal swap amount for pre-balancing two token balances
+/// Binary search to find optimal swap amount for pre-balancing two token balances.
+///
+/// The goal is to minimize dust returned by the SC's add_liquidity function.
+/// The SC uses `quote()` which truncates: `optimal_b = a * reserve_b / reserve_a`
+///
+/// We search for the swap amount where the SC's quote calculation results in
+/// minimal leftover (dust). The SC will use all of one token and return dust of the other.
 #[allow(clippy::too_many_arguments)]
 fn binary_search_pre_swap<M: ManagedTypeApi>(
     balance_first: &BigUint<M>,
@@ -216,6 +214,8 @@ fn binary_search_pre_swap<M: ManagedTypeApi>(
 
     let mut low = BigUint::zero();
     let mut high = swap_balance.clone();
+    let mut best_swap = BigUint::zero();
+    let mut best_dust = swap_balance.clone(); // Start with worst case
 
     for _ in 0..MAX_BINARY_SEARCH_ITERATIONS {
         // Check convergence
@@ -227,8 +227,8 @@ fn binary_search_pre_swap<M: ManagedTypeApi>(
         let mid = &low + &((&high - &low) / 2u64);
 
         // Simulate swap at midpoint
-        // Returns (user_output, amount_leaving_reserves)
-        let (received, amount_leaving) =
+        // Returns (user_output, amount_out_leaving, amount_in_to_reserves)
+        let (received, amount_out_leaving, amount_in_to_reserves) =
             simulate_swap_output(&mid, reserve_in, reserve_out, fee_num, fee_denom, fee_mode);
 
         if received == BigUint::zero() {
@@ -241,14 +241,33 @@ fn binary_search_pre_swap<M: ManagedTypeApi>(
         let final_other_balance = other_balance + &received;
 
         // Calculate new reserves after swap
-        // reserve_in increases by full input amount
-        // reserve_out decreases by amount_leaving (accounts for LP fees staying in pool)
-        let new_reserve_in = reserve_in + &mid;
-        let new_reserve_out = reserve_out - &amount_leaving;
+        let new_reserve_in = reserve_in + &amount_in_to_reserves;
+        let new_reserve_out = reserve_out - &amount_out_leaving;
 
-        // Check if final balances are in ratio with new reserves
-        // final_swap_balance / new_reserve_in vs final_other_balance / new_reserve_out
-        // Cross multiply: final_swap_balance * new_reserve_out vs final_other_balance * new_reserve_in
+        // Simulate SC's set_optimal_amounts logic using quote()
+        // quote(a, res_a, res_b) = a * res_b / res_a (truncated)
+        // SC checks: if quote(swap_bal, new_res_in, new_res_out) <= other_bal
+        //   then use (swap_bal, quote_result) -> dust = other_bal - quote_result
+        //   else use (quote(other_bal, new_res_out, new_res_in), other_bal) -> dust = swap_bal - quote_result
+
+        let quote_other_from_swap = &final_swap_balance * &new_reserve_out / &new_reserve_in;
+
+        let dust = if &quote_other_from_swap <= &final_other_balance {
+            // SC will use all of swap_balance, return excess other_balance
+            &final_other_balance - &quote_other_from_swap
+        } else {
+            // SC will use all of other_balance, return excess swap_balance
+            let quote_swap_from_other = &final_other_balance * &new_reserve_in / &new_reserve_out;
+            &final_swap_balance - &quote_swap_from_other
+        };
+
+        // Track best result
+        if dust < best_dust {
+            best_dust = dust.clone();
+            best_swap = mid.clone();
+        }
+
+        // Binary search direction based on ratio comparison
         let product_swap = &final_swap_balance * &new_reserve_out;
         let product_other = &final_other_balance * &new_reserve_in;
 
@@ -264,6 +283,6 @@ fn binary_search_pre_swap<M: ManagedTypeApi>(
         }
     }
 
-    // Return best candidate
-    &low + &((&high - &low) / 2u64)
+    // Return the swap amount that minimizes dust
+    best_swap
 }

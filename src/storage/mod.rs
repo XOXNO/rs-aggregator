@@ -67,29 +67,34 @@ pub trait Storage {
         }
     }
 
-    /// Get fee (total_fee, lp_fee, fee_denom) for a pair based on action type (only for add liquidity zap)
-    /// Returns the total fee, LP fee (portion that stays in pool), and denominator
-    /// For fee-on-input DEXes (xExchange, OneDex), lp_fee equals total_fee (all stays in pool)
-    /// For fee-on-output DEXes (JEX), lp_fee is just the LP portion
+    /// Get fee parameters for a pair based on action type (only for add liquidity zap)
+    /// Returns (total_fee, special_fee, lp_fee, fee_denom)
+    /// - total_fee: used for output calculation
+    /// - special_fee: portion that leaves pool (for xExchange)
+    /// - lp_fee: portion that stays in pool (for JEX OnOutput mode)
     fn get_fee(
         &self,
         action: &ActionType<Self::Api>,
         pair_address: &ManagedAddress,
-    ) -> (u64, u64, u64) {
+    ) -> (u64, u64, u64, u64) {
         match action {
             // xExchange: total_fee_percent with base 100,000
-            // All fees stay in pool (fee-on-input model)
+            // special_fee leaves pool (burned/sent to fees collector)
             ActionType::XExchangeAddLiquidity => {
                 let total_fee = self.xexchange_total_fee_percent(pair_address.clone()).get();
-                (total_fee, total_fee, 100_000)
+                let special_fee = self
+                    .xexchange_special_fee_percent(pair_address.clone())
+                    .get();
+                (total_fee, special_fee, 0, 100_000)
             }
             // OneDex: PairFee enum with base 10,000
-            // All fees stay in pool (fee-on-input model)
+            // owner_fee + real_yield_fee leave pool, lp_fee stays
             ActionType::OneDexAddLiquidity(pair_id) => {
                 let router = ManagedAddress::from(ONE_DEX_ROUTER);
                 let pair_fee = self.one_dex_pair_fee(router, *pair_id).get();
                 let total = pair_fee.get_total_fee_percentage();
-                (total, total, TOTAL_FEE as u64)
+                let special = pair_fee.get_special_fee_percentage();
+                (total, special, 0, TOTAL_FEE as u64)
             }
             // JEX: liq_providers_fees + platform_fees with base 10,000
             // Only LP fees stay in pool, platform fees leave (fee-on-output model)
@@ -98,10 +103,10 @@ pub trait Storage {
                 let platform_fees = self.jex_platform_fees(pair_address.clone()).get();
                 let total_fee = (lp_fees + platform_fees) as u64;
                 let lp_fee = lp_fees as u64;
-                (total_fee, lp_fee, TOTAL_FEE as u64)
+                (total_fee, 0, lp_fee, TOTAL_FEE as u64)
             }
             // Other actions don't need fee for zap
-            _ => (0, 0, TOTAL_FEE as u64),
+            _ => (0, 0, 0, TOTAL_FEE as u64),
         }
     }
 

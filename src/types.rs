@@ -117,6 +117,15 @@ impl PairFee {
             PairFee::Percent10 => 100, // 1.0%
         }
     }
+
+    /// Returns owner_fee + real_yield_fee (the portion that leaves the pool)
+    pub fn get_special_fee_percentage(&self) -> u64 {
+        match self {
+            PairFee::Percent04 => 20, // 0.1% owner + 0.1% real_yield = 0.2%
+            PairFee::Percent06 => 30, // 0.15% + 0.15% = 0.3%
+            PairFee::Percent10 => 50, // 0.25% + 0.25% = 0.5%
+        }
+    }
 }
 
 /// Referral configuration stored per referral ID

@@ -770,12 +770,13 @@ pub trait Utils: crate::storage::Storage {
         let (reserve_first, reserve_second) = self.get_reserves(&instr.action, &pool_address);
         let pool_first_token = self.get_pool_first_token(&instr.action, &pool_address);
         let pool_second_token = self.get_pool_second_token(&instr.action, &pool_address);
-        let (fee_num, lp_fee_num, fee_denom) = self.get_fee(&instr.action, &pool_address);
+        let (fee_num, special_fee_num, lp_fee_num, fee_denom) =
+            self.get_fee(&instr.action, &pool_address);
         let fee_mode = match &instr.action {
             // JEX uses fee-on-output with split fees (LP stays, protocol leaves)
             types::ActionType::JexAddLiquidity => zap::FeeMode::OnOutput { lp_fee_num },
-            // xExchange and OneDex use fee-on-input (all fees stay in pool)
-            _ => zap::FeeMode::OnInput,
+            // xExchange and OneDex use fee-on-input with special_fee leaving pool
+            _ => zap::FeeMode::OnInput { special_fee_num },
         };
 
         // 2. Get current balances (payments are always in first, second order)
