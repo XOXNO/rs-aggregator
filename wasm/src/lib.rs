@@ -6,9 +6,9 @@
 
 // Init:                                 1
 // Upgrade:                              1
-// Endpoints:                           12
+// Endpoints:                           13
 // Async Callback (empty):               1
-// Total number of exported functions:  15
+// Total number of exported functions:  16
 
 #![no_std]
 
@@ -21,6 +21,7 @@ multiversx_sc_wasm_adapter::endpoints! {
         init => init
         upgrade => upgrade
         xo => aggregate
+        getReferralIdCounter => referral_id_counter
         getReferralConfig => referral_config
         getStaticFee => static_fee
         addReferral => add_referral

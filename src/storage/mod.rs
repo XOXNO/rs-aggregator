@@ -304,7 +304,7 @@ pub trait Storage {
     // =========================================================================
     // Fee & Referral Storage (local contract storage)
     // =========================================================================
-
+    #[view(getReferralIdCounter)]
     #[storage_mapper("id")]
     fn referral_id_counter(&self) -> SingleValueMapper<u64>;
 
