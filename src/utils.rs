@@ -694,27 +694,28 @@ pub trait Utils: crate::storage::Storage {
         referral_id: u64,
     ) {
         let output_balance = vault.balance_of(token_out);
+        let static_fee_bps = self.static_fee().get();
 
+        // Check for valid referral
         if referral_id > 0 && !self.referral_config(referral_id).is_empty() {
             let config = self.referral_config(referral_id).get();
             if config.active && config.fee > 0 {
-                // Calculate referral fee and matching admin fee
+                // Calculate static fee (goes to admin) + referral fee (goes to referrer)
+                let static_fee = &output_balance * static_fee_bps / TOTAL_FEE;
                 let referral_fee = &output_balance * config.fee / TOTAL_FEE;
-                let admin_fee = referral_fee.clone();
-                let total = &referral_fee + &admin_fee;
+                let total = &static_fee + &referral_fee;
 
                 // Withdraw total fees from vault
                 vault.withdraw(token_out, &total);
 
-                // Accumulate fees
+                // Accumulate fees separately
+                self.accumulate_admin_fee(token_out, &static_fee);
                 self.accumulate_referrer_fee(referral_id, token_out, &referral_fee);
-                self.accumulate_admin_fee(token_out, &admin_fee);
                 return;
             }
         }
 
-        // No valid referral - apply static fee
-        let static_fee_bps = self.static_fee().get();
+        // No valid referral - apply static fee only
         if static_fee_bps > 0 {
             let fee = &output_balance * static_fee_bps / TOTAL_FEE;
             vault.withdraw(token_out, &fee);
