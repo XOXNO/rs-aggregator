@@ -12,7 +12,7 @@ deploy() {
 
 upgrade() {
     echo "Upgrade smart contract address: ${ADDRESS}"
-    mxpy  contract upgrade ${ADDRESS} --metadata-payable-by-sc --bytecode=${PROJECT} \
+    mxpy  contract upgrade ${ADDRESS} --bytecode=${PROJECT} \
     --ledger \
     --gas-limit=150000000 --send --proxy=${PROXY} --chain=1 || return
 }

@@ -6,9 +6,9 @@
 
 // Init:                                 1
 // Upgrade:                              1
-// Endpoints:                           13
+// Endpoints:                           14
 // Async Callback (empty):               1
-// Total number of exported functions:  16
+// Total number of exported functions:  17
 
 #![no_std]
 
@@ -32,6 +32,7 @@ multiversx_sc_wasm_adapter::endpoints! {
         claimReferralFees => claim_referral_fees
         claimAdminFees => claim_admin_fees
         getReferrerBalances => get_referrer_balances
+        getReferrerTokens => get_referrer_tokens
         getAdminFees => get_admin_fees_view
     )
 }

@@ -693,13 +693,18 @@ pub trait Utils: crate::storage::Storage {
         token_out: &TokenId<Self::Api>,
         referral_id: u64,
     ) {
-        let output_balance = vault.balance_of(token_out);
-        let static_fee_bps = self.static_fee().get();
+        // No fees if referral_id is 0
+        if referral_id == 0 {
+            return;
+        }
 
         // Check for valid referral
-        if referral_id > 0 && !self.referral_config(referral_id).is_empty() {
+        if !self.referral_config(referral_id).is_empty() {
             let config = self.referral_config(referral_id).get();
-            if config.active && config.fee > 0 {
+            if config.active {
+                let output_balance = vault.balance_of(token_out);
+                let static_fee_bps = self.static_fee().get();
+
                 // Calculate static fee (goes to admin) + referral fee (goes to referrer)
                 let static_fee = &output_balance * static_fee_bps / TOTAL_FEE;
                 let referral_fee = &output_balance * config.fee / TOTAL_FEE;
@@ -710,16 +715,10 @@ pub trait Utils: crate::storage::Storage {
 
                 // Accumulate fees separately
                 self.accumulate_admin_fee(token_out, &static_fee);
-                self.accumulate_referrer_fee(referral_id, token_out, &referral_fee);
-                return;
+                if config.fee > 0 {
+                    self.accumulate_referrer_fee(referral_id, token_out, &referral_fee);
+                }
             }
-        }
-
-        // No valid referral - apply static fee only
-        if static_fee_bps > 0 {
-            let fee = &output_balance * static_fee_bps / TOTAL_FEE;
-            vault.withdraw(token_out, &fee);
-            self.accumulate_admin_fee(token_out, &fee);
         }
     }
 
