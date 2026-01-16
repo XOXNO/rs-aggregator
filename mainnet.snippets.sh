@@ -82,8 +82,7 @@ claimAdminFees() {
     recipient=$1
     mxpy contract call ${ADDRESS} --function=claimAdminFees \
     --arguments addr:${recipient} \
-    --ledger \
-    --gas-limit=50000000 --send --proxy=${PROXY} --chain=1
+    --ledger --send --proxy=${PROXY} --chain=1
 }
 
 # Claim accumulated referral fees (can be called by referral owner)
@@ -92,6 +91,5 @@ claimReferralFees() {
     referral_id=$1
     mxpy contract call ${ADDRESS} --function=claimReferralFees \
     --arguments ${referral_id} \
-    --ledger \
-    --gas-limit=50000000 --send --proxy=${PROXY} --chain=1
+    --ledger --send --proxy=${PROXY} --chain=1
 }

@@ -4,8 +4,6 @@ use crate::errors::{
     ERR_INSUFFICIENT_BALANCE_PREFIX, ERR_ONLY_FUNGIBLE_PREFIX, ERR_TOKEN_NOT_FOUND_PREFIX,
 };
 use multiversx_sc::api::VMApi;
-use multiversx_sc::chain_core::EGLD_000000_TOKEN_IDENTIFIER;
-pub const EGLD_TOKEN_IDENTIFIER: &str = "EGLD";
 
 /// In-memory vault for tracking intermediate token balances during aggregation
 /// Uses ManagedMapEncoded for O(1) key-value access
@@ -34,31 +32,17 @@ impl<M: VMApi> Vault<M> {
     }
 
     /// Initialize vault from a single ESDT payment
-    pub fn from_payment(payment: EgldOrEsdtTokenPayment<M>) -> Self {
+    pub fn from_payment(payments: &PaymentVec<M>) -> Self {
         let mut vault = Self::new();
-        if payment.token_nonce != 0 {
-            let mut buffer = ManagedBufferBuilder::<M>::new_from_slice(ERR_ONLY_FUNGIBLE_PREFIX);
-            buffer.append_managed_buffer(payment.token_identifier.as_managed_buffer());
-            let msg = buffer.into_managed_buffer();
-            M::error_api_impl().signal_error_from_buffer(msg.get_handle());
+        for payment in payments.iter() {
+            if payment.token_nonce != 0 {
+                let mut buffer = ManagedBufferBuilder::<M>::new_from_slice(ERR_ONLY_FUNGIBLE_PREFIX);
+                buffer.append_managed_buffer(payment.token_identifier.as_managed_buffer());
+                let msg = buffer.into_managed_buffer();
+                M::error_api_impl().signal_error_from_buffer(msg.get_handle());
+            }
+            vault.deposit(&payment.token_identifier, &payment.amount.clone());
         }
-
-        // Normalize: empty token identifier or EGLD-000000 -> EGLD-000000
-        // SC-to-SC calls may send EGLD with empty identifier (old standard)
-        // Direct user calls may have EGLD-000000 already
-        let token_buf = payment.token_identifier.as_managed_buffer();
-        let is_egld = token_buf.is_empty()
-            || payment.token_identifier.is_egld()
-            || token_buf == &ManagedBuffer::from(EGLD_TOKEN_IDENTIFIER.as_bytes())
-            || token_buf == &ManagedBuffer::from(EGLD_000000_TOKEN_IDENTIFIER.as_bytes());
-
-        let token_id = if is_egld {
-            TokenId::from(EGLD_000000_TOKEN_IDENTIFIER.as_bytes())
-        } else {
-            TokenId::from(payment.token_identifier.clone())
-        };
-
-        vault.deposit(&token_id, &payment.amount.clone().into_non_zero().unwrap());
         vault
     }
 

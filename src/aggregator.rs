@@ -69,8 +69,8 @@ pub trait Aggregator: storage::Storage + config::Config + utils::Utils {
         instructions: MultiValueEncoded<MultiValue6<u8, u8, u8, u8, u8, u16>>,
     ) {
         // 1. Initialize vault from incoming payments
-        let payment = self.call_value().egld_or_single_esdt();
-        let mut vault = Vault::from_payment(payment);
+        let payment = self.call_value().all();
+        let mut vault = Vault::from_payment(&payment);
 
         // 2. Build registries for O(1) index lookup
         let token_registry: TokenRegistry<Self::Api> = tokens.to_vec();
