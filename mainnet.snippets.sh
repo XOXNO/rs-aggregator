@@ -122,12 +122,12 @@ removeWhitelistedToken() {
 # Usage: addWhitelistedTokensBatch <token1> <token2> ...
 # Example: addWhitelistedTokensBatch WEGLD-bd4d79 USDC-c76f1f
 addWhitelistedTokensBatch() {
-    args=""
+    local args=()
     for token in "$@"; do
-        args="$args str:${token}"
+        args+=("str:${token}")
     done
     mxpy contract call ${ADDRESS} --function=addWhitelistedTokensBatch \
-    --arguments ${args} \
+    --arguments "${args[@]}" \
     --ledger \
     --gas-limit=20000000 --send --proxy=${PROXY} --chain=1
 }
