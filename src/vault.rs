@@ -36,7 +36,8 @@ impl<M: VMApi> Vault<M> {
         let mut vault = Self::new();
         for payment in payments.iter() {
             if payment.token_nonce != 0 {
-                let mut buffer = ManagedBufferBuilder::<M>::new_from_slice(ERR_ONLY_FUNGIBLE_PREFIX);
+                let mut buffer =
+                    ManagedBufferBuilder::<M>::new_from_slice(ERR_ONLY_FUNGIBLE_PREFIX);
                 buffer.append_managed_buffer(payment.token_identifier.as_managed_buffer());
                 let msg = buffer.into_managed_buffer();
                 M::error_api_impl().signal_error_from_buffer(msg.get_handle());

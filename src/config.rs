@@ -62,6 +62,37 @@ pub trait Config: crate::storage::Storage {
         self.static_fee().set(fee);
     }
 
+    // --- Fee Whitelist Management ---
+
+    /// Add a token to the fee whitelist
+    /// Whitelisted tokens as output trigger fee-on-output (when input is not whitelisted)
+    #[only_owner]
+    #[endpoint(addWhitelistedToken)]
+    fn add_whitelisted_token(&self, token: TokenId<Self::Api>) {
+        self.whitelisted_tokens().insert(token);
+    }
+
+    /// Remove a token from the fee whitelist
+    #[only_owner]
+    #[endpoint(removeWhitelistedToken)]
+    fn remove_whitelisted_token(&self, token: TokenId<Self::Api>) {
+        self.whitelisted_tokens().swap_remove(&token);
+    }
+
+    /// Batch add tokens to the fee whitelist
+    #[only_owner]
+    #[endpoint(addWhitelistedTokensBatch)]
+    fn add_whitelisted_tokens_batch(&self, tokens: MultiValueEncoded<TokenId<Self::Api>>) {
+        self.whitelisted_tokens().extend(tokens);
+    }
+
+    /// Clear all whitelisted tokens
+    #[only_owner]
+    #[endpoint(clearWhitelistedTokens)]
+    fn clear_whitelisted_tokens(&self) {
+        self.whitelisted_tokens().clear();
+    }
+
     // --- Claim Endpoints ---
 
     /// Claim accumulated referral fees for a given referral ID

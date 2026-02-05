@@ -3,7 +3,7 @@ name = "aggregator"
 version = "0.0.0"
 edition = "2021"
 publish = false
-authors = ["you"]
+authors = ["mihai@xoxno.com"]
 
 [lib]
 path = "src/aggregator.rs"

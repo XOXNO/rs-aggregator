@@ -685,12 +685,14 @@ pub trait Utils: crate::storage::Storage {
 
     // --- Fee Logic ---
 
-    /// Apply fees to the output token before returning to caller
-    /// referral_id = 0 means no referral
-    fn apply_fees(
+    /// Apply fees on a specific token.
+    /// The fee direction (input vs output) is determined by the caller.
+    ///
+    /// `referral_id` = 0 means no referral (no fees applied)
+    fn apply_fees_on_token(
         &self,
         vault: &mut Vault<Self::Api>,
-        token_out: &TokenId<Self::Api>,
+        fee_token: &TokenId<Self::Api>,
         referral_id: u64,
     ) {
         // No fees if referral_id is 0
@@ -699,26 +701,30 @@ pub trait Utils: crate::storage::Storage {
         }
 
         // Check for valid referral
-        if !self.referral_config(referral_id).is_empty() {
-            let config = self.referral_config(referral_id).get();
-            if config.active {
-                let output_balance = vault.balance_of(token_out);
-                let static_fee_bps = self.static_fee().get();
+        if self.referral_config(referral_id).is_empty() {
+            return;
+        }
 
-                // Calculate static fee (goes to admin) + referral fee (goes to referrer)
-                let static_fee = &output_balance * static_fee_bps / TOTAL_FEE;
-                let referral_fee = &output_balance * config.fee / TOTAL_FEE;
-                let total = &static_fee + &referral_fee;
+        let config = self.referral_config(referral_id).get();
+        if !config.active {
+            return;
+        }
 
-                // Withdraw total fees from vault
-                vault.withdraw(token_out, &total);
+        let balance = vault.balance_of(fee_token);
+        let static_fee_bps = self.static_fee().get();
 
-                // Accumulate fees separately
-                self.accumulate_admin_fee(token_out, &static_fee);
-                if config.fee > 0 {
-                    self.accumulate_referrer_fee(referral_id, token_out, &referral_fee);
-                }
-            }
+        // Calculate static fee (goes to admin) + referral fee (goes to referrer)
+        let static_fee = &balance * static_fee_bps / TOTAL_FEE;
+        let referral_fee = &balance * config.fee / TOTAL_FEE;
+        let total = &static_fee + &referral_fee;
+
+        // Withdraw total fees from vault
+        vault.withdraw(fee_token, &total);
+
+        // Accumulate fees separately
+        self.accumulate_admin_fee(fee_token, &static_fee);
+        if config.fee > 0 {
+            self.accumulate_referrer_fee(referral_id, fee_token, &referral_fee);
         }
     }
 
