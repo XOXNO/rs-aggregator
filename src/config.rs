@@ -62,13 +62,44 @@ pub trait Config: crate::storage::Storage {
         self.static_fee().set(fee);
     }
 
+    // --- Fee Whitelist Management ---
+
+    /// Add a token to the fee whitelist
+    /// Whitelisted tokens as output trigger fee-on-output (when input is not whitelisted)
+    #[only_owner]
+    #[endpoint(addWhitelistedToken)]
+    fn add_whitelisted_token(&self, token: TokenId<Self::Api>) {
+        self.whitelisted_tokens().insert(token);
+    }
+
+    /// Remove a token from the fee whitelist
+    #[only_owner]
+    #[endpoint(removeWhitelistedToken)]
+    fn remove_whitelisted_token(&self, token: TokenId<Self::Api>) {
+        self.whitelisted_tokens().swap_remove(&token);
+    }
+
+    /// Batch add tokens to the fee whitelist
+    #[only_owner]
+    #[endpoint(addWhitelistedTokensBatch)]
+    fn add_whitelisted_tokens_batch(&self, tokens: MultiValueEncoded<TokenId<Self::Api>>) {
+        self.whitelisted_tokens().extend(tokens);
+    }
+
+    /// Clear all whitelisted tokens
+    #[only_owner]
+    #[endpoint(clearWhitelistedTokens)]
+    fn clear_whitelisted_tokens(&self) {
+        self.whitelisted_tokens().clear();
+    }
+
     // --- Claim Endpoints ---
 
     /// Claim accumulated referral fees for a given referral ID
     /// Can be called by anyone, fees are always sent to the referral owner
     /// Limited to 90 unique tokens per call to prevent out-of-gas
     #[endpoint(claimReferralFees)]
-    fn claim_referral_fees(&self, referral_id: u64) {
+    fn claim_referral_fees(&self, referral_id: u64, tokens: MultiValueEncoded<TokenId<Self::Api>>) {
         require!(
             !self.referral_config(referral_id).is_empty(),
             ERR_REFERRAL_NOT_FOUND
@@ -78,17 +109,35 @@ pub trait Config: crate::storage::Storage {
         let mut payments = ManagedVec::new();
         let mut claimed_tokens = ManagedVec::<Self::Api, TokenId<Self::Api>>::new();
 
-        for (token, amount) in self.referrer_balances(referral_id).iter() {
-            if payments.len() >= 90 {
-                break;
+        if tokens.len() == 0 {
+            for (token, amount) in self.referrer_balances(referral_id).iter() {
+                if payments.len() >= 90 {
+                    break;
+                }
+                if amount > 0u64 {
+                    payments.push(Payment::new(
+                        token.clone(),
+                        0,
+                        amount.into_non_zero().unwrap(),
+                    ));
+                    claimed_tokens.push(token);
+                }
             }
-            if amount > 0u64 {
-                payments.push(Payment::new(
-                    token.clone(),
-                    0,
-                    amount.into_non_zero().unwrap(),
-                ));
-                claimed_tokens.push(token);
+        } else {
+            for token in tokens {
+                if payments.len() >= 90 {
+                    break;
+                }
+                if let Some(amount) = self.referrer_balances(referral_id).get(&token) {
+                    if amount > 0u64 {
+                        payments.push(Payment::new(
+                            token.clone(),
+                            0,
+                            amount.into_non_zero().unwrap(),
+                        ));
+                        claimed_tokens.push(token);
+                    }
+                }
             }
         }
 
@@ -142,10 +191,30 @@ pub trait Config: crate::storage::Storage {
     fn get_referrer_balances(
         &self,
         referral_id: u64,
+        tokens: MultiValueEncoded<TokenId<Self::Api>>,
     ) -> MultiValueEncoded<(TokenId<Self::Api>, BigUint<Self::Api>)> {
         let mut result = MultiValueEncoded::new();
-        for (token, amount) in self.referrer_balances(referral_id).iter() {
-            result.push((token, amount));
+
+        if tokens.is_empty() {
+            for (token, amount) in self.referrer_balances(referral_id).iter() {
+                result.push((token, amount));
+            }
+        } else {
+            for token in tokens {
+                if let Some(amount) = self.referrer_balances(referral_id).get(&token) {
+                    result.push((token, amount));
+                }
+            }
+        }
+        result
+    }
+
+    #[view(getReferrerTokens)]
+    fn get_referrer_tokens(&self, referral_id: u64) -> ManagedVec<TokenId<Self::Api>> {
+        let mut result = ManagedVec::new();
+
+        for token in self.referrer_balances(referral_id).keys() {
+            result.push(token);
         }
         result
     }

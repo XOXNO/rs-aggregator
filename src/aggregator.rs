@@ -69,8 +69,8 @@ pub trait Aggregator: storage::Storage + config::Config + utils::Utils {
         instructions: MultiValueEncoded<MultiValue6<u8, u8, u8, u8, u8, u16>>,
     ) {
         // 1. Initialize vault from incoming payments
-        let payment = self.call_value().egld_or_single_esdt();
-        let mut vault = Vault::from_payment(payment);
+        let payment = self.call_value().all();
+        let mut vault = Vault::from_payment(&payment);
 
         // 2. Build registries for O(1) index lookup
         let token_registry: TokenRegistry<Self::Api> = tokens.to_vec();
@@ -80,7 +80,29 @@ pub trait Aggregator: storage::Storage + config::Config + utils::Utils {
         // Resolve token_out from index
         let token_out_id = self.resolve_token_to_id(token_out, &token_registry);
 
-        // 3. Execute each compact instruction sequentially
+        // 3. Determine fee direction and apply fee on input if needed
+        // Bulk payments (len > 1): always fee on output
+        // Single payment: check whitelist rules
+        let is_bulk = payment.len() > 1;
+        let fee_on_input = if is_bulk {
+            false // Bulk payments always fee on output
+        } else {
+            // Single input: check whitelist rules
+            let token_in_id = payment.get(0).token_identifier.clone();
+            let in_whitelisted = self.whitelisted_tokens().contains(&token_in_id);
+            let out_whitelisted = self.whitelisted_tokens().contains(&token_out_id);
+            // Fee on output ONLY if token_out is whitelisted AND token_in is NOT
+            // Otherwise fee on input
+            !out_whitelisted || in_whitelisted
+        };
+
+        // Apply fee on INPUT token BEFORE processing instructions
+        // This reduces the vault balance before swaps execute
+        if fee_on_input && !is_bulk {
+            self.apply_fees_on_token(&mut vault, &payment.get(0).token_identifier, referral_id);
+        }
+
+        // 4. Execute each compact instruction sequentially
         for compact_instr in instructions {
             let (action_byte, byte1, byte2, byte3, byte4, pair_id_or_addr) =
                 compact_instr.into_tuple();
@@ -101,10 +123,12 @@ pub trait Aggregator: storage::Storage + config::Config + utils::Utils {
             self.execute_instruction(&mut vault, &instruction, &token_out_id);
         }
 
-        // 4. Apply fees before slippage check (0 = no referral)
-        self.apply_fees(&mut vault, &token_out_id, referral_id);
+        // 5. Apply fee on OUTPUT token AFTER processing instructions (if not already applied on input)
+        if !fee_on_input {
+            self.apply_fees_on_token(&mut vault, &token_out_id, referral_id);
+        }
 
-        // 5. Verify minimum output amount AFTER fees
+        // 6. Verify minimum output amount AFTER fees
         let current_balance = vault.balance_of(&token_out_id);
 
         require!(
@@ -114,7 +138,7 @@ pub trait Aggregator: storage::Storage + config::Config + utils::Utils {
             min_amount_out
         );
 
-        // 6. Return only output token to caller, keep dust as protocol revenue
+        // 7. Return only output token to caller, keep dust as protocol revenue
         self.return_vault_to_caller(vault, &token_out_id);
     }
 }

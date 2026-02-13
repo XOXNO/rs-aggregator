@@ -6,9 +6,9 @@
 
 // Init:                                 1
 // Upgrade:                              1
-// Endpoints:                           13
+// Endpoints:                           19
 // Async Callback (empty):               1
-// Total number of exported functions:  16
+// Total number of exported functions:  22
 
 #![no_std]
 
@@ -24,14 +24,20 @@ multiversx_sc_wasm_adapter::endpoints! {
         getReferralIdCounter => referral_id_counter
         getReferralConfig => referral_config
         getStaticFee => static_fee
+        getWhitelistedTokens => whitelisted_tokens
         addReferral => add_referral
         setReferralFee => set_referral_fee
         setReferralActive => set_referral_active
         setReferralOwner => set_referral_owner
         setStaticFee => set_static_fee
+        addWhitelistedToken => add_whitelisted_token
+        removeWhitelistedToken => remove_whitelisted_token
+        addWhitelistedTokensBatch => add_whitelisted_tokens_batch
+        clearWhitelistedTokens => clear_whitelisted_tokens
         claimReferralFees => claim_referral_fees
         claimAdminFees => claim_admin_fees
         getReferrerBalances => get_referrer_balances
+        getReferrerTokens => get_referrer_tokens
         getAdminFees => get_admin_fees_view
     )
 }

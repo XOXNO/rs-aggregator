@@ -321,4 +321,12 @@ pub trait Storage {
 
     #[storage_mapper("balances")]
     fn admin_fees(&self) -> MapMapper<TokenId, BigUint>;
+
+    // =========================================================================
+    // Fee Whitelist Storage (tokens that trigger fee-on-output when as output)
+    // =========================================================================
+
+    #[view(getWhitelistedTokens)]
+    #[storage_mapper("whitelistedTokens")]
+    fn whitelisted_tokens(&self) -> UnorderedSetMapper<TokenId<Self::Api>>;
 }

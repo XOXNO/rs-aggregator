@@ -12,7 +12,7 @@ deploy() {
 
 upgrade() {
     echo "Upgrade smart contract address: ${ADDRESS}"
-    mxpy  contract upgrade ${ADDRESS} --metadata-payable-by-sc --bytecode=${PROJECT} \
+    mxpy  contract upgrade ${ADDRESS} --bytecode=${PROJECT} \
     --ledger \
     --gas-limit=150000000 --send --proxy=${PROXY} --chain=1 || return
 }
@@ -82,8 +82,7 @@ claimAdminFees() {
     recipient=$1
     mxpy contract call ${ADDRESS} --function=claimAdminFees \
     --arguments addr:${recipient} \
-    --ledger \
-    --gas-limit=50000000 --send --proxy=${PROXY} --chain=1
+    --ledger --send --proxy=${PROXY} --chain=1
 }
 
 # Claim accumulated referral fees (can be called by referral owner)
@@ -92,6 +91,57 @@ claimReferralFees() {
     referral_id=$1
     mxpy contract call ${ADDRESS} --function=claimReferralFees \
     --arguments ${referral_id} \
+    --ledger --send --proxy=${PROXY} --chain=1
+}
+
+# --- Fee Whitelist Endpoints ---
+
+# Add a token to the fee whitelist (only owner)
+# Whitelisted tokens trigger fee-on-output when used as output token
+# Usage: addWhitelistedToken <token_identifier>
+# Example: addWhitelistedToken WEGLD-bd4d79
+addWhitelistedToken() {
+    token=$1
+    mxpy contract call ${ADDRESS} --function=addWhitelistedToken \
+    --arguments str:${token} \
+    --ledger \
+    --gas-limit=10000000 --send --proxy=${PROXY} --chain=1
+}
+
+# Remove a token from the fee whitelist (only owner)
+# Usage: removeWhitelistedToken <token_identifier>
+removeWhitelistedToken() {
+    token=$1
+    mxpy contract call ${ADDRESS} --function=removeWhitelistedToken \
+    --arguments str:${token} \
+    --ledger \
+    --gas-limit=10000000 --send --proxy=${PROXY} --chain=1
+}
+
+# Batch add multiple tokens to the fee whitelist (only owner)
+# Usage: addWhitelistedTokensBatch <token1> <token2> ...
+# Example: addWhitelistedTokensBatch WEGLD-bd4d79 USDC-c76f1f
+addWhitelistedTokensBatch() {
+    local args=()
+    for token in "$@"; do
+        args+=("str:${token}")
+    done
+    mxpy contract call ${ADDRESS} --function=addWhitelistedTokensBatch \
+    --arguments "${args[@]}" \
+    --ledger \
+    --gas-limit=20000000 --send --proxy=${PROXY} --chain=1
+}
+
+# Clear all whitelisted tokens (only owner)
+# Usage: clearWhitelistedTokens
+clearWhitelistedTokens() {
+    mxpy contract call ${ADDRESS} --function=clearWhitelistedTokens \
     --ledger \
     --gas-limit=50000000 --send --proxy=${PROXY} --chain=1
+}
+
+# Query whitelisted tokens (view function)
+# Usage: getWhitelistedTokens
+getWhitelistedTokens() {
+    mxpy contract query ${ADDRESS} --function=getWhitelistedTokens --proxy=${PROXY}
 }
