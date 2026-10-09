@@ -6,6 +6,7 @@ multiversx_sc::derive_imports!();
 pub mod config;
 pub mod constants;
 pub mod errors;
+pub mod events;
 pub mod proxies;
 pub mod storage;
 pub mod types;
@@ -24,7 +25,7 @@ use vault::Vault;
 /// - LP to Token burning
 /// - LP to LP conversion
 #[multiversx_sc::contract]
-pub trait Aggregator: storage::Storage + config::Config + utils::Utils {
+pub trait Aggregator: storage::Storage + config::Config + utils::Utils + events::Events {
     #[init]
     fn init(&self) {}
 
@@ -96,10 +97,18 @@ pub trait Aggregator: storage::Storage + config::Config + utils::Utils {
             !out_whitelisted || in_whitelisted
         };
 
+        let fee_token = if fee_on_input {
+            payment.get(0).token_identifier.clone()
+        } else {
+            token_out_id.clone()
+        };
+        let mut applied_fees = (0, BigUint::zero(), BigUint::zero());
+        let mut admin_fees = Vault::new();
+
         // Apply fee on INPUT token BEFORE processing instructions
         // This reduces the vault balance before swaps execute
         if fee_on_input && !is_bulk {
-            self.apply_fees_on_token(&mut vault, &payment.get(0).token_identifier, referral_id);
+            applied_fees = self.apply_fees_on_token(&mut vault, &fee_token, referral_id);
         }
 
         // 4. Execute each compact instruction sequentially
@@ -120,12 +129,12 @@ pub trait Aggregator: storage::Storage + config::Config + utils::Utils {
                 &amount_registry,
             );
 
-            self.execute_instruction(&mut vault, &instruction, &token_out_id);
+            self.execute_instruction(&mut vault, &instruction, &token_out_id, &mut admin_fees);
         }
 
         // 5. Apply fee on OUTPUT token AFTER processing instructions (if not already applied on input)
         if !fee_on_input {
-            self.apply_fees_on_token(&mut vault, &token_out_id, referral_id);
+            applied_fees = self.apply_fees_on_token(&mut vault, &fee_token, referral_id);
         }
 
         // 6. Verify minimum output amount AFTER fees
@@ -139,6 +148,23 @@ pub trait Aggregator: storage::Storage + config::Config + utils::Utils {
         );
 
         // 7. Return only output token to caller, keep dust as protocol revenue
-        self.return_vault_to_caller(vault, &token_out_id);
+        let outputs = self.return_vault_to_caller(vault, &token_out_id, &mut admin_fees);
+        let (used_referral_id, admin_fee, referral_fee) = applied_fees;
+        if let Some(amount) = admin_fee.into_non_zero() {
+            admin_fees.deposit(&fee_token, &amount);
+        }
+        let mut referral_fees = ManagedVec::new();
+        if let Some(amount) = referral_fee.into_non_zero() {
+            referral_fees.push(Payment::new(fee_token, 0, amount));
+        }
+
+        self.aggregate_event(
+            &self.blockchain().get_caller(),
+            used_referral_id,
+            &payment,
+            &outputs,
+            &admin_fees.get_all_payments(),
+            &referral_fees,
+        );
     }
 }

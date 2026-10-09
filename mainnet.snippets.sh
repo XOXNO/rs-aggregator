@@ -1,6 +1,7 @@
 ADDRESS=erd1qqqqqqqqqqqqqpgq5rf2sppxk2xu4m0pkmugw2es4gak3rgjah0sxvajva
-PROXY=https://gateway.xoxno.com
-PROJECT="./output/aggregator.wasm"
+PROXY=https://gateway.multiversx.com
+PROJECT="./output-docker/aggregator/aggregator.wasm"
+PROJECT_VERIFY="./output-docker/aggregator/aggregator-0.0.0.source.json"
 
 deploy() {
     mxpy contract deploy --bytecode=${PROJECT} --metadata-payable-by-sc \
@@ -8,6 +9,12 @@ deploy() {
     --gas-limit=150000000 --send --proxy=${PROXY} --chain=1 || return
 
     echo "New smart contract address: ${ADDRESS}"
+}
+
+verifyContract() {
+    mxpy --verbose contract verify "${ADDRESS}"  \
+    --packaged-src="${PROJECT_VERIFY}" --verifier-url="https://play-api.multiversx.com" \
+    --docker-image="multiversx/sdk-rust-contract-builder:v11.0.0" --ledger || return
 }
 
 upgrade() {
@@ -138,6 +145,13 @@ clearWhitelistedTokens() {
     mxpy contract call ${ADDRESS} --function=clearWhitelistedTokens \
     --ledger \
     --gas-limit=50000000 --send --proxy=${PROXY} --chain=1
+}
+
+
+claimDeveloperRewards() {
+    mxpy contract call ${ADDRESS} --function=ClaimDeveloperRewards \
+    --ledger \
+    --gas-limit=6000000 --send --proxy=${PROXY} --chain=1
 }
 
 # Query whitelisted tokens (view function)

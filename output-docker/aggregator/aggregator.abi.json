@@ -1,0 +1,475 @@
+{
+    "buildInfo": {
+        "contractCrate": {
+            "name": "aggregator",
+            "version": "0.0.0"
+        },
+        "framework": {
+            "name": "multiversx-sc",
+            "version": "0.64.1"
+        }
+    },
+    "docs": [
+        "MultiversX DEX Aggregator with LP Support",
+        "",
+        "Executes swap paths from the arb-algo aggregator, supporting:",
+        "- Token to Token swaps with splits and hops",
+        "- Token to LP minting",
+        "- LP to Token burning",
+        "- LP to LP conversion"
+    ],
+    "name": "Aggregator",
+    "constructor": {
+        "inputs": [],
+        "outputs": []
+    },
+    "upgradeConstructor": {
+        "inputs": [],
+        "outputs": []
+    },
+    "endpoints": [
+        {
+            "docs": [
+                "Execute a sequence of aggregator instructions using compact encoding",
+                "",
+                "# Compact Format",
+                "Each instruction is 6 bytes encoded as MultiValue6<u8,u8,u8,u8,u8,u8>:",
+                "- Byte 0: action type (see CompactAction enum)",
+                "- Byte 1: token1 index into tokens registry (or IDX_EGLD for EGLD, IDX_NONE for prev)",
+                "- Byte 2: mode1 (0=All, 1=Prev, 2-127=Fixed amounts[n], 128-255=PPM amounts[n])",
+                "- Byte 3: token2 index (or IDX_NONE for single input)",
+                "- Byte 4: mode2 (or 0 if single input)",
+                "- Byte 5: address index (or IDX_AUTO for auto-resolved addresses)",
+                "",
+                "# Arguments",
+                "* `min_amount_out` - Minimum expected output amount (slippage protection)",
+                "* `token_out` - Output token index into tokens registry (or IDX_EGLD for EGLD)",
+                "* `referral_id` - Referral ID for fee sharing (0 = no referral)",
+                "* `tokens` - Token registry (referenced by index in instructions and token_out)",
+                "* `addresses` - Address registry (referenced by index in instructions)",
+                "* `amounts` - Values registry (Fixed amounts or PPM values, referenced by mode)",
+                "* `instructions` - Compact 6-byte instructions",
+                "",
+                "# Returns",
+                "All remaining vault tokens are sent back to caller"
+            ],
+            "name": "xo",
+            "mutability": "mutable",
+            "payableInTokens": [
+                "*"
+            ],
+            "inputs": [
+                {
+                    "name": "min_amount_out",
+                    "type": "BigUint"
+                },
+                {
+                    "name": "token_out",
+                    "type": "u8"
+                },
+                {
+                    "name": "referral_id",
+                    "type": "u64"
+                },
+                {
+                    "name": "tokens",
+                    "type": "counted-variadic<TokenIdentifier>",
+                    "multi_arg": true
+                },
+                {
+                    "name": "addresses",
+                    "type": "counted-variadic<Address>",
+                    "multi_arg": true
+                },
+                {
+                    "name": "amounts",
+                    "type": "counted-variadic<BigUint>",
+                    "multi_arg": true
+                },
+                {
+                    "name": "instructions",
+                    "type": "variadic<multi<u8,u8,u8,u8,u8,u16>>",
+                    "multi_arg": true
+                }
+            ],
+            "outputs": [],
+            "allow_multiple_var_args": true
+        },
+        {
+            "name": "getReferralIdCounter",
+            "mutability": "readonly",
+            "inputs": [],
+            "outputs": [
+                {
+                    "type": "u64"
+                }
+            ]
+        },
+        {
+            "name": "getReferralConfig",
+            "mutability": "readonly",
+            "inputs": [
+                {
+                    "name": "id",
+                    "type": "u64"
+                }
+            ],
+            "outputs": [
+                {
+                    "type": "ReferralConfig"
+                }
+            ]
+        },
+        {
+            "name": "getStaticFee",
+            "mutability": "readonly",
+            "inputs": [],
+            "outputs": [
+                {
+                    "type": "u32"
+                }
+            ]
+        },
+        {
+            "name": "getWhitelistedTokens",
+            "mutability": "readonly",
+            "inputs": [],
+            "outputs": [
+                {
+                    "type": "variadic<TokenId>",
+                    "multi_result": true
+                }
+            ]
+        },
+        {
+            "docs": [
+                "Add a new referral with the given owner and fee",
+                "Returns the new referral ID",
+                "Note: Referral fee is capped at 50% because total fees = referral_fee + admin_fee (matching)"
+            ],
+            "name": "addReferral",
+            "onlyOwner": true,
+            "mutability": "mutable",
+            "inputs": [
+                {
+                    "name": "owner",
+                    "type": "Address"
+                },
+                {
+                    "name": "fee",
+                    "type": "u32"
+                }
+            ],
+            "outputs": [
+                {
+                    "type": "u64"
+                }
+            ]
+        },
+        {
+            "docs": [
+                "Update the fee for an existing referral",
+                "Note: Referral fee is capped at 50% because total fees = referral_fee + admin_fee (matching)"
+            ],
+            "name": "setReferralFee",
+            "onlyOwner": true,
+            "mutability": "mutable",
+            "inputs": [
+                {
+                    "name": "id",
+                    "type": "u64"
+                },
+                {
+                    "name": "fee",
+                    "type": "u32"
+                }
+            ],
+            "outputs": []
+        },
+        {
+            "docs": [
+                "Enable or disable a referral"
+            ],
+            "name": "setReferralActive",
+            "onlyOwner": true,
+            "mutability": "mutable",
+            "inputs": [
+                {
+                    "name": "id",
+                    "type": "u64"
+                },
+                {
+                    "name": "active",
+                    "type": "bool"
+                }
+            ],
+            "outputs": []
+        },
+        {
+            "docs": [
+                "Change the owner of an existing referral"
+            ],
+            "name": "setReferralOwner",
+            "onlyOwner": true,
+            "mutability": "mutable",
+            "inputs": [
+                {
+                    "name": "id",
+                    "type": "u64"
+                },
+                {
+                    "name": "new_owner",
+                    "type": "Address"
+                }
+            ],
+            "outputs": []
+        },
+        {
+            "docs": [
+                "Set the static fee for trades without a referral"
+            ],
+            "name": "setStaticFee",
+            "onlyOwner": true,
+            "mutability": "mutable",
+            "inputs": [
+                {
+                    "name": "fee",
+                    "type": "u32"
+                }
+            ],
+            "outputs": []
+        },
+        {
+            "docs": [
+                "Add a token to the fee whitelist",
+                "Whitelisted tokens as output trigger fee-on-output (when input is not whitelisted)"
+            ],
+            "name": "addWhitelistedToken",
+            "onlyOwner": true,
+            "mutability": "mutable",
+            "inputs": [
+                {
+                    "name": "token",
+                    "type": "TokenId"
+                }
+            ],
+            "outputs": []
+        },
+        {
+            "docs": [
+                "Remove a token from the fee whitelist"
+            ],
+            "name": "removeWhitelistedToken",
+            "onlyOwner": true,
+            "mutability": "mutable",
+            "inputs": [
+                {
+                    "name": "token",
+                    "type": "TokenId"
+                }
+            ],
+            "outputs": []
+        },
+        {
+            "docs": [
+                "Batch add tokens to the fee whitelist"
+            ],
+            "name": "addWhitelistedTokensBatch",
+            "onlyOwner": true,
+            "mutability": "mutable",
+            "inputs": [
+                {
+                    "name": "tokens",
+                    "type": "variadic<TokenId>",
+                    "multi_arg": true
+                }
+            ],
+            "outputs": []
+        },
+        {
+            "docs": [
+                "Clear all whitelisted tokens"
+            ],
+            "name": "clearWhitelistedTokens",
+            "onlyOwner": true,
+            "mutability": "mutable",
+            "inputs": [],
+            "outputs": []
+        },
+        {
+            "docs": [
+                "Claim accumulated referral fees for a given referral ID",
+                "Can be called by anyone, fees are always sent to the referral owner",
+                "Limited to 90 unique tokens per call to prevent out-of-gas"
+            ],
+            "name": "claimReferralFees",
+            "mutability": "mutable",
+            "inputs": [
+                {
+                    "name": "referral_id",
+                    "type": "u64"
+                },
+                {
+                    "name": "tokens",
+                    "type": "variadic<TokenId>",
+                    "multi_arg": true
+                }
+            ],
+            "outputs": []
+        },
+        {
+            "docs": [
+                "Claim accumulated admin fees",
+                "Can only be called by the contract owner",
+                "Limited to 90 unique tokens per call to prevent out-of-gas"
+            ],
+            "name": "claimAdminFees",
+            "onlyOwner": true,
+            "mutability": "mutable",
+            "inputs": [
+                {
+                    "name": "recipient",
+                    "type": "Address"
+                }
+            ],
+            "outputs": []
+        },
+        {
+            "docs": [
+                "Get all accumulated balances for a referrer"
+            ],
+            "name": "getReferrerBalances",
+            "mutability": "readonly",
+            "inputs": [
+                {
+                    "name": "referral_id",
+                    "type": "u64"
+                },
+                {
+                    "name": "tokens",
+                    "type": "variadic<TokenId>",
+                    "multi_arg": true
+                }
+            ],
+            "outputs": [
+                {
+                    "type": "variadic<tuple<TokenId,BigUint>>",
+                    "multi_result": true
+                }
+            ]
+        },
+        {
+            "name": "getReferrerTokens",
+            "mutability": "readonly",
+            "inputs": [
+                {
+                    "name": "referral_id",
+                    "type": "u64"
+                }
+            ],
+            "outputs": [
+                {
+                    "type": "List<TokenId>"
+                }
+            ]
+        },
+        {
+            "docs": [
+                "Get all accumulated admin fees"
+            ],
+            "name": "getAdminFees",
+            "mutability": "readonly",
+            "inputs": [],
+            "outputs": [
+                {
+                    "type": "variadic<tuple<TokenId,BigUint>>",
+                    "multi_result": true
+                }
+            ]
+        }
+    ],
+    "events": [
+        {
+            "docs": [
+                "Final settlement: original inputs, paid outputs, and fees credited by this call.",
+                "Admin fees include retained dust, merged by token. Empty lists mean no fees.",
+                "Referral ID is the active ID accepted for fee calculation, or 0 if none.",
+                "Each payment list is one encoded topic containing token, nonce, and amount."
+            ],
+            "identifier": "aggregate",
+            "inputs": [
+                {
+                    "name": "caller",
+                    "type": "Address",
+                    "indexed": true
+                },
+                {
+                    "name": "referral_id",
+                    "type": "u64",
+                    "indexed": true
+                },
+                {
+                    "name": "inputs",
+                    "type": "List<Payment>",
+                    "indexed": true
+                },
+                {
+                    "name": "outputs",
+                    "type": "List<Payment>",
+                    "indexed": true
+                },
+                {
+                    "name": "admin_fees",
+                    "type": "List<Payment>",
+                    "indexed": true
+                },
+                {
+                    "name": "referral_fees",
+                    "type": "List<Payment>",
+                    "indexed": true
+                }
+            ]
+        }
+    ],
+    "esdtAttributes": [],
+    "hasCallback": false,
+    "types": {
+        "Payment": {
+            "type": "struct",
+            "fields": [
+                {
+                    "name": "token_identifier",
+                    "type": "TokenId"
+                },
+                {
+                    "name": "token_nonce",
+                    "type": "u64"
+                },
+                {
+                    "name": "amount",
+                    "type": "NonZeroBigUint"
+                }
+            ]
+        },
+        "ReferralConfig": {
+            "type": "struct",
+            "docs": [
+                "Referral configuration stored per referral ID"
+            ],
+            "fields": [
+                {
+                    "name": "owner",
+                    "type": "Address"
+                },
+                {
+                    "name": "fee",
+                    "type": "u32"
+                },
+                {
+                    "name": "active",
+                    "type": "bool"
+                }
+            ]
+        }
+    }
+}

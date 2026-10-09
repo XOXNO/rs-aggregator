@@ -28,17 +28,26 @@ pub trait Utils: crate::storage::Storage {
     fn proxy_call(&self, address: ManagedAddress) -> proxies::Proxy<Self::Api>;
 
     /// Return only the output token to the caller, keep dust as protocol revenue
-    fn return_vault_to_caller(&self, vault: Vault<Self::Api>, token_out: &TokenId<Self::Api>) {
+    fn return_vault_to_caller(
+        &self,
+        vault: Vault<Self::Api>,
+        token_out: &TokenId<Self::Api>,
+        admin_fees: &mut Vault<Self::Api>,
+    ) -> PaymentVec<Self::Api> {
         let caller = self.blockchain().get_caller();
+        let mut outputs = ManagedVec::new();
 
         for payment in vault.get_all_payments().iter() {
             if payment.token_identifier == *token_out {
                 self.tx().to(&caller).payment(payment.clone()).transfer();
+                outputs.push(payment.clone());
             } else {
                 // Keep all other tokens (dust) as protocol revenue
                 self.accumulate_admin_fee(&payment.token_identifier, payment.amount.as_big_uint());
+                admin_fees.deposit(&payment.token_identifier, &payment.amount);
             }
         }
+        outputs
     }
 
     /// Resolve token index to TokenId (vault format)
@@ -386,6 +395,7 @@ pub trait Utils: crate::storage::Storage {
         vault: &mut Vault<Self::Api>,
         instr: &Instruction<Self::Api>,
         token_out: &TokenId<Self::Api>,
+        admin_fees: &mut Vault<Self::Api>,
     ) {
         let mut input_payments = ManagedVec::new();
 
@@ -426,7 +436,7 @@ pub trait Utils: crate::storage::Storage {
         }
 
         // 2. Dispatch to appropriate proxy
-        self.dispatch_to_proxy(vault, instr, &input_payments, token_out);
+        self.dispatch_to_proxy(vault, instr, &input_payments, token_out, admin_fees);
     }
 
     // --- Dispatch Logic ---
@@ -438,10 +448,12 @@ pub trait Utils: crate::storage::Storage {
         instr: &Instruction<Self::Api>,
         payments: &ManagedVec<Payment<Self::Api>>,
         token_out: &TokenId<Self::Api>,
+        admin_fees: &mut Vault<Self::Api>,
     ) {
         // For zappable add_liquidity actions, use pre-balance optimization
         if self.is_zappable_add_liquidity(&instr.action) {
-            return self.pre_balance_and_add_liquidity(vault, instr, payments, token_out);
+            return self
+                .pre_balance_and_add_liquidity(vault, instr, payments, token_out, admin_fees);
         }
 
         let min = BigUint::from(MIN_INTERNAL_OUTPUT);
@@ -689,25 +701,26 @@ pub trait Utils: crate::storage::Storage {
     /// The fee direction (input vs output) is determined by the caller.
     ///
     /// `referral_id` = 0 means no referral (no fees applied)
+    /// Returns the accepted referral ID (0 if missing/inactive), admin fee, and referral fee.
     fn apply_fees_on_token(
         &self,
         vault: &mut Vault<Self::Api>,
         fee_token: &TokenId<Self::Api>,
         referral_id: u64,
-    ) {
+    ) -> (u64, BigUint<Self::Api>, BigUint<Self::Api>) {
         // No fees if referral_id is 0
         if referral_id == 0 {
-            return;
+            return (0, BigUint::zero(), BigUint::zero());
         }
 
         // Check for valid referral
         if self.referral_config(referral_id).is_empty() {
-            return;
+            return (0, BigUint::zero(), BigUint::zero());
         }
 
         let config = self.referral_config(referral_id).get();
         if !config.active {
-            return;
+            return (0, BigUint::zero(), BigUint::zero());
         }
 
         let balance = vault.balance_of(fee_token);
@@ -726,6 +739,7 @@ pub trait Utils: crate::storage::Storage {
         if config.fee > 0 {
             self.accumulate_referrer_fee(referral_id, fee_token, &referral_fee);
         }
+        (referral_id, static_fee, referral_fee)
     }
 
     fn accumulate_referrer_fee(
@@ -768,6 +782,7 @@ pub trait Utils: crate::storage::Storage {
         instr: &Instruction<Self::Api>,
         payments: &ManagedVec<Payment<Self::Api>>,
         token_out: &TokenId<Self::Api>,
+        admin_fees: &mut Vault<Self::Api>,
     ) {
         let min = BigUint::from(MIN_INTERNAL_OUTPUT);
 
@@ -911,6 +926,7 @@ pub trait Utils: crate::storage::Storage {
             } else {
                 // Dust from LP creation goes to admin fees
                 self.accumulate_admin_fee(&payment.token_identifier, payment.amount.as_big_uint());
+                admin_fees.deposit(&payment.token_identifier, &payment.amount);
             }
         }
     }
