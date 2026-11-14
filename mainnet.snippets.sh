@@ -24,6 +24,9 @@ upgrade() {
     --gas-limit=150000000 --send --proxy=${PROXY} --chain=1 || return
 }
 
+buildDocker() {
+    mxpy contract reproducible-build --docker-image="multiversx/sdk-rust-contract-builder:v11.0.0"
+}
 # --- Config Endpoints ---
 
 # Add a new referral with the given owner and fee (only owner)

@@ -10,6 +10,9 @@ pub const ERR_REFERRAL_FEE_EXCEEDS_50: &str =
     "Referral fee exceeds 50% (total fees would exceed 100%)";
 pub const ERR_REFERRAL_NOT_FOUND: &str = "Referral not found";
 pub const ERR_PPM_EXCEEDS_100_PERCENT: &str = "PPM value exceeds 1,000,000 (100%)";
+pub const ERR_INPUT_NOT_EGLD: &str = "Input token must be EGLD";
+pub const ERR_ZAP_SWAP_TOKEN_MISMATCH: &str = "Zap swap returned unexpected token";
+pub const ERR_CONTRACT_BALANCE_DECREASED: &str = "Contract balance decreased";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Dynamic Error Prefixes (token info appended at runtime)

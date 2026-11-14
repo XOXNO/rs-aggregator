@@ -5,7 +5,8 @@ use crate::constants::{
     XEGLD_STAKING,
 };
 use crate::errors::{
-    ERR_PPM_EXCEEDS_100_PERCENT, ERR_PREV_AMOUNT_NOT_AVAILABLE, ERR_PREV_AMOUNT_TOKEN_MISMATCH,
+    ERR_CONTRACT_BALANCE_DECREASED, ERR_INPUT_NOT_EGLD, ERR_PPM_EXCEEDS_100_PERCENT,
+    ERR_PREV_AMOUNT_NOT_AVAILABLE, ERR_PREV_AMOUNT_TOKEN_MISMATCH, ERR_ZAP_SWAP_TOKEN_MISMATCH,
     ERR_ZERO_INPUT_AMOUNT,
 };
 use crate::types::{
@@ -48,6 +49,84 @@ pub trait Utils: crate::storage::Storage {
             }
         }
         outputs
+    }
+
+    /// Snapshot what the contract held before this call, excluding the caller's payment,
+    /// for every token an instruction can spend: EGLD, registry tokens and payment tokens.
+    /// These balances belong to fee claimants and must never be spent by an aggregation.
+    fn snapshot_held_balances(
+        &self,
+        payment: &PaymentVec<Self::Api>,
+        tokens: &TokenRegistry<Self::Api>,
+    ) -> (
+        ManagedVec<Self::Api, TokenId<Self::Api>>,
+        ManagedVec<Self::Api, BigUint<Self::Api>>,
+    ) {
+        let mut tracked = ManagedVec::new();
+        tracked.push(TokenId::from(EGLD_000000_TOKEN_IDENTIFIER.as_bytes()));
+        for token in tokens.iter() {
+            tracked.push(TokenId::from(token.as_managed_buffer().clone()));
+        }
+        for p in payment.iter() {
+            tracked.push(p.token_identifier.clone());
+        }
+
+        let mut held = ManagedVec::new();
+        for token in tracked.iter() {
+            held.push(
+                self.blockchain().get_sc_balance(&*token, 0) - self.amount_of(payment, &token),
+            );
+        }
+        (tracked, held)
+    }
+
+    /// Require every pre-call balance to still be held, plus the fees credited by this call.
+    fn require_held_balances(
+        &self,
+        tracked: &ManagedVec<Self::Api, TokenId<Self::Api>>,
+        held: &ManagedVec<Self::Api, BigUint<Self::Api>>,
+        admin_fees: &PaymentVec<Self::Api>,
+        referral_fees: &PaymentVec<Self::Api>,
+    ) {
+        for (token, held) in tracked.iter().zip(held.iter()) {
+            let required = held.clone()
+                + self.amount_of(admin_fees, &token)
+                + self.amount_of(referral_fees, &token);
+            require!(
+                self.blockchain().get_sc_balance(&*token, 0) >= required,
+                ERR_CONTRACT_BALANCE_DECREASED
+            );
+        }
+    }
+
+    /// Total amount of `token` in a payment list
+    fn amount_of(
+        &self,
+        payments: &PaymentVec<Self::Api>,
+        token: &TokenId<Self::Api>,
+    ) -> BigUint<Self::Api> {
+        let mut total = BigUint::zero();
+        for p in payments.iter() {
+            if p.token_identifier == *token {
+                total += p.amount.as_big_uint();
+            }
+        }
+        total
+    }
+
+    /// Token-checked output of a zap pre-swap: a pool that answers with any other token
+    /// must not have that amount counted as `expected`
+    fn zap_swap_output(
+        &self,
+        swap_result: BackTransfers<Self::Api>,
+        expected: &TokenId<Self::Api>,
+    ) -> BigUint<Self::Api> {
+        let received = swap_result.to_single_esdt();
+        require!(
+            received.token_identifier.as_managed_buffer() == expected.as_managed_buffer(),
+            ERR_ZAP_SWAP_TOKEN_MISMATCH
+        );
+        received.amount
     }
 
     /// Resolve token index to TokenId (vault format)
@@ -458,6 +537,20 @@ pub trait Utils: crate::storage::Storage {
 
         let min = BigUint::from(MIN_INTERNAL_OUTPUT);
 
+        // These actions only take EGLD; Wrapping and HatomLiquidStaking send the contract's
+        // own EGLD for the input amount, so the vault input must actually be EGLD
+        if matches!(
+            instr.action,
+            types::ActionType::Wrapping
+                | types::ActionType::HatomLiquidStaking
+                | types::ActionType::XoxnoLiquidStaking
+        ) {
+            require!(
+                payments.get(0).token_identifier.is_native(),
+                ERR_INPUT_NOT_EGLD
+            );
+        }
+
         let mut call = self.get_proxy_call(instr, payments);
 
         // Execute the appropriate proxy call based on DEX type
@@ -853,7 +946,7 @@ pub trait Utils: crate::storage::Storage {
                     _ => return,
                 };
 
-                let received = swap_result.to_single_esdt().amount;
+                let received = self.zap_swap_output(swap_result, &token_second);
                 (&balance_first - &swap_amount, &balance_second + &received)
             } else {
                 // Swap some second token for first
@@ -889,7 +982,7 @@ pub trait Utils: crate::storage::Storage {
                     _ => return,
                 };
 
-                let received = swap_result.to_single_esdt().amount;
+                let received = self.zap_swap_output(swap_result, &token_first);
                 (&balance_first + &received, &balance_second - &swap_amount)
             }
         } else {

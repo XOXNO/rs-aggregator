@@ -106,44 +106,28 @@ pub trait Config: crate::storage::Storage {
         );
         let config = self.referral_config(referral_id).get();
 
-        let mut payments = ManagedVec::new();
-        let mut claimed_tokens = ManagedVec::<Self::Api, TokenId<Self::Api>>::new();
-
-        if tokens.len() == 0 {
-            for (token, amount) in self.referrer_balances(referral_id).iter() {
-                if payments.len() >= 90 {
-                    break;
-                }
-                if amount > 0u64 {
-                    payments.push(Payment::new(
-                        token.clone(),
-                        0,
-                        amount.into_non_zero().unwrap(),
-                    ));
-                    claimed_tokens.push(token);
-                }
-            }
+        // No tokens given: claim the first 90 accrued ones
+        let tokens: ManagedVec<Self::Api, TokenId<Self::Api>> = if tokens.is_empty() {
+            self.referrer_balances(referral_id)
+                .keys()
+                .take(90)
+                .collect()
         } else {
-            for token in tokens {
-                if payments.len() >= 90 {
-                    break;
-                }
-                if let Some(amount) = self.referrer_balances(referral_id).get(&token) {
-                    if amount > 0u64 {
-                        payments.push(Payment::new(
-                            token.clone(),
-                            0,
-                            amount.into_non_zero().unwrap(),
-                        ));
-                        claimed_tokens.push(token);
-                    }
+            tokens.to_vec()
+        };
+
+        let mut payments = ManagedVec::new();
+        for token in tokens.iter() {
+            if payments.len() >= 90 {
+                break;
+            }
+            // remove() takes the balance out of storage, so a token listed
+            // more than once is paid only on its first occurrence
+            if let Some(amount) = self.referrer_balances(referral_id).remove(&token) {
+                if let Some(payment) = self.claimable(&token, amount) {
+                    payments.push(payment);
                 }
             }
-        }
-
-        // Clear only claimed tokens
-        for token in claimed_tokens.iter() {
-            self.referrer_balances(referral_id).remove(&token);
         }
 
         if !payments.is_empty() {
@@ -157,31 +141,36 @@ pub trait Config: crate::storage::Storage {
     #[only_owner]
     #[endpoint(claimAdminFees)]
     fn claim_admin_fees(&self, recipient: ManagedAddress) {
+        let tokens: ManagedVec<Self::Api, TokenId<Self::Api>> =
+            self.admin_fees().keys().take(90).collect();
+
         let mut payments = ManagedVec::new();
-        let mut claimed_tokens = ManagedVec::<Self::Api, TokenId<Self::Api>>::new();
-
-        for (token, amount) in self.admin_fees().iter() {
-            if payments.len() >= 90 {
-                break;
+        for token in tokens.iter() {
+            if let Some(amount) = self.admin_fees().remove(&token) {
+                if let Some(payment) = self.claimable(&token, amount) {
+                    payments.push(payment);
+                }
             }
-            if amount > 0u64 {
-                payments.push(Payment::new(
-                    token.clone(),
-                    0,
-                    amount.into_non_zero().unwrap(),
-                ));
-                claimed_tokens.push(token);
-            }
-        }
-
-        // Clear only claimed tokens
-        for token in claimed_tokens.iter() {
-            self.admin_fees().remove(&token);
         }
 
         if !payments.is_empty() {
             self.tx().to(&recipient).payment(&payments).transfer();
         }
+    }
+
+    /// Payment for a claimed balance, capped at what the contract actually holds.
+    /// The recorded balance is cleared by the caller either way, so a shortfall
+    /// is written off instead of blocking the whole claim.
+    fn claimable(
+        &self,
+        token: &TokenId<Self::Api>,
+        recorded: BigUint<Self::Api>,
+    ) -> Option<Payment<Self::Api>> {
+        let held = self.blockchain().get_sc_balance(token, 0);
+        let amount = if recorded > held { held } else { recorded };
+        amount
+            .into_non_zero()
+            .map(|amount| Payment::new(token.clone(), 0, amount))
     }
 
     // --- View Functions ---

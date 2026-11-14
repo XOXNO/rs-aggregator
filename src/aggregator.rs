@@ -81,6 +81,11 @@ pub trait Aggregator: storage::Storage + config::Config + utils::Utils + events:
         // Resolve token_out from index
         let token_out_id = self.resolve_token_to_id(token_out, &token_registry);
 
+        // Snapshot fee balances held for claimants; instructions and pool addresses are
+        // caller-controlled, so the final check below must prove none of it was spent
+        let (tracked_tokens, held_balances) =
+            self.snapshot_held_balances(&payment, &token_registry);
+
         // 3. Determine fee direction and apply fee on input if needed
         // Bulk payments (len > 1): always fee on output
         // Single payment: check whitelist rules
@@ -158,12 +163,15 @@ pub trait Aggregator: storage::Storage + config::Config + utils::Utils + events:
             referral_fees.push(Payment::new(fee_token, 0, amount));
         }
 
+        let admin_fees = admin_fees.get_all_payments();
+        self.require_held_balances(&tracked_tokens, &held_balances, &admin_fees, &referral_fees);
+
         self.aggregate_event(
             &self.blockchain().get_caller(),
             used_referral_id,
             &payment,
             &outputs,
-            &admin_fees.get_all_payments(),
+            &admin_fees,
             &referral_fees,
         );
     }
